@@ -101,15 +101,15 @@ impl TryFrom<String> for DetectorField {
     }
 }
 
-trait PathField: TryFrom<String> + Eq + Hash + Clone + 'static {}
-impl<F> PathField for F where F: TryFrom<String> + Eq + Hash + Clone + 'static {}
+pub trait PathField: TryFrom<String> + Eq + Hash + Display + Clone + 'static {}
+impl<F> PathField for F where F: TryFrom<String> + Eq + Hash + Display + Clone + 'static {}
 
-trait PathSpec {
+pub trait PathSpec {
     type Field: PathField;
     const REQUIRED: &'static [Self::Field];
     const ABSOLUTE: bool;
 
-    fn create(path: &str) -> Result<PathTemplate<Self::Field>, InvalidPathTemplate<Self::Field>> {
+    fn validate(path: &str) -> Result<(), InvalidPathTemplate> {
         let template = PathTemplate::new(path)?;
         match (Self::ABSOLUTE, template.is_absolute()) {
             (true, false) => Err(InvalidPathTemplate::ShouldBeAbsolute),
@@ -119,21 +119,22 @@ trait PathSpec {
         let fields = template.referenced_fields().collect::<HashSet<_>>();
         for f in Self::REQUIRED {
             if !fields.contains(f) {
-                return Err(InvalidPathTemplate::MissingField(f.clone()));
+                return Err(InvalidPathTemplate::MissingField(f.to_string()));
             }
         }
-        Ok(template)
+        Ok(())
     }
 }
 
-enum InvalidPathTemplate<E> {
+#[derive(Debug)]
+pub enum InvalidPathTemplate {
     TemplateError(PathTemplateError),
     ShouldBeAbsolute,
     ShouldBeRelative,
-    MissingField(E),
+    MissingField(String),
 }
 
-impl<F: Debug> Display for InvalidPathTemplate<F> {
+impl Display for InvalidPathTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InvalidPathTemplate::TemplateError(e) => write!(f, "{e}"),
@@ -146,7 +147,16 @@ impl<F: Debug> Display for InvalidPathTemplate<F> {
     }
 }
 
-impl<F> From<PathTemplateError> for InvalidPathTemplate<F> {
+impl Error for InvalidPathTemplate {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            InvalidPathTemplate::TemplateError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<PathTemplateError> for InvalidPathTemplate {
     fn from(value: PathTemplateError) -> Self {
         Self::TemplateError(value)
     }

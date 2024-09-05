@@ -6,6 +6,8 @@ use clap_verbosity_flag::{InfoLevel, Verbosity};
 use tracing::Level;
 use url::Url;
 
+use crate::paths::{DetectorTemplate, InvalidPathTemplate, PathSpec, ScanTemplate, VisitTemplate};
+
 #[derive(Debug, Parser)]
 pub struct Cli {
     #[clap(short, long, default_value = "numtracker.db")]
@@ -145,6 +147,16 @@ pub enum TemplateKind {
     Visit,
     Scan,
     Detector,
+}
+
+impl TemplateKind {
+    pub fn validate(&self, template: &str) -> Result<(), InvalidPathTemplate> {
+        match self {
+            TemplateKind::Visit => VisitTemplate::validate(template),
+            TemplateKind::Scan => ScanTemplate::validate(template),
+            TemplateKind::Detector => DetectorTemplate::validate(template),
+        }
+    }
 }
 
 impl Cli {

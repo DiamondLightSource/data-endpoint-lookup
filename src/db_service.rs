@@ -8,7 +8,10 @@ use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions};
 use sqlx::{query_as, query_file, query_file_as, query_file_scalar, Sqlite, SqlitePool};
 use tracing::{debug, info, instrument, warn};
 
-pub use self::error::{SqliteNumberDirectoryError, SqliteNumberError, SqliteTemplateError};
+pub use self::error::{
+    InsertTemplateError, SqliteNumberDirectoryError, SqliteNumberError, SqliteTemplateError,
+};
+use crate::cli::TemplateKind;
 use crate::numtracker;
 use crate::paths::{BeamlineField, DetectorField, InvalidKey, ScanField};
 use crate::template::PathTemplate;
@@ -44,26 +47,6 @@ impl Display for TemplateOption {
     }
 }
 
-/// Macro to get or insert a new template id. Written as a macro instead of a function as
-/// sqlx queries require string literals for compile time checking.
-macro_rules! get_or_insert {
-    ($db:expr, $insert_query:literal, $get_id_query:literal, $template:ident) => {{
-        let mut trn = ($db).begin().await?;
-        let insert = query_file_scalar!($insert_query, $template)
-            .fetch_optional(&mut *trn)
-            .await?;
-        match insert {
-            Some(ins) => {
-                trn.commit().await?;
-                sqlx::Result::<_>::Ok(Some(ins))
-            }
-            None => Ok(query_file_scalar!($get_id_query, $template)
-                .fetch_one(&mut *trn)
-                .await?),
-        }
-    }};
-}
-
 impl SqliteScanPathService {
     #[instrument]
     pub async fn connect(filename: &Path) -> Result<Self, sqlx::Error> {
@@ -89,6 +72,26 @@ impl SqliteScanPathService {
 
         Ok(PathTemplate::new(template)?)
     }
+
+    async fn get_or_insert_template<'bl>(
+        &self,
+        insert: QueryScalar<'bl, Sqlite, i64, SqliteArguments<'bl>>,
+        get: impl FnOnce() -> QueryScalar<'bl, Sqlite, Option<i64>, SqliteArguments<'bl>>,
+    ) -> Result<i64, sqlx::Error> {
+        let mut trn = self.pool.begin().await?;
+        let insert = insert.fetch_optional(&mut *trn).await?;
+        match insert {
+            Some(ins) => {
+                trn.commit().await?;
+                sqlx::Result::<_>::Ok(ins)
+            }
+            None => Ok(get()
+                .fetch_one(&mut *trn)
+                .await?
+                .expect("Template missing after being inserted")),
+        }
+    }
+
     pub async fn next_scan_number(&self, beamline: &str) -> Result<usize, SqliteNumberError> {
         let next = self.db_scan_number(beamline).await?;
         let fallback = self.directory_scan_number(beamline).await;
@@ -228,55 +231,60 @@ impl SqliteScanPathService {
         Ok(())
     }
 
-    pub async fn get_or_insert_visit_template(&self, template: String) -> sqlx::Result<i64> {
-        Ok(get_or_insert!(
-            self.pool,
-            "queries/insert_visit_template.sql",
-            "queries/get_visit_template.sql",
-            template
-        )?
-        .expect("Visit template missing after being added"))
+    pub async fn insert_template(
+        &self,
+        kind: TemplateKind,
+        template: String,
+    ) -> Result<i64, InsertTemplateError> {
+        kind.validate(&template)?;
+        let template = template.as_str();
+        let new_id = match kind {
+            TemplateKind::Visit => {
+                self.get_or_insert_template(
+                    query_file_scalar!("queries/insert_visit_template.sql", template),
+                    || query_file_scalar!("queries/get_visit_template.sql", template),
+                )
+                .await
+            }
+            TemplateKind::Scan => {
+                self.get_or_insert_template(
+                    query_file_scalar!("queries/insert_scan_template.sql", template),
+                    || query_file_scalar!("queries/get_scan_template.sql", template),
+                )
+                .await
+            }
+            TemplateKind::Detector => {
+                self.get_or_insert_template(
+                    query_file_scalar!("queries/insert_detector_template.sql", template),
+                    || query_file_scalar!("queries/get_detector_template.sql", template),
+                )
+                .await
+            }
+        }?;
+        Ok(new_id)
     }
 
-    pub async fn get_visit_templates(&self) -> sqlx::Result<Vec<TemplateOption>> {
-        query_as!(TemplateOption, "SELECT id, template FROM visit_template;")
-            .fetch_all(&self.pool)
-            .await
-    }
-
-    pub async fn get_or_insert_scan_template(&self, template: String) -> sqlx::Result<i64> {
-        Ok(get_or_insert!(
-            self.pool,
-            "queries/insert_scan_template.sql",
-            "queries/get_scan_template.sql",
-            template
-        )?
-        .expect("Scan template missing after being added"))
-    }
-
-    pub async fn get_scan_templates(&self) -> sqlx::Result<Vec<TemplateOption>> {
-        query_as!(TemplateOption, "SELECT id, template FROM scan_template;")
-            .fetch_all(&self.pool)
-            .await
-    }
-
-    pub async fn get_or_insert_detector_template(&self, template: String) -> sqlx::Result<i64> {
-        Ok(get_or_insert!(
-            self.pool,
-            "queries/insert_detector_template.sql",
-            "queries/get_detector_template.sql",
-            template
-        )?
-        .expect("Detector template missing after being added"))
-    }
-
-    pub async fn get_detector_templates(&self) -> sqlx::Result<Vec<TemplateOption>> {
-        query_as!(
-            TemplateOption,
-            "SELECT id, template FROM detector_template;"
-        )
-        .fetch_all(&self.pool)
-        .await
+    pub async fn get_templates(&self, kind: TemplateKind) -> sqlx::Result<Vec<TemplateOption>> {
+        match kind {
+            TemplateKind::Visit => {
+                query_as!(TemplateOption, "SELECT id, template FROM visit_template;")
+                    .fetch_all(&self.pool)
+                    .await
+            }
+            TemplateKind::Scan => {
+                query_as!(TemplateOption, "SELECT id, template FROM scan_template;")
+                    .fetch_all(&self.pool)
+                    .await
+            }
+            TemplateKind::Detector => {
+                query_as!(
+                    TemplateOption,
+                    "SELECT id, template FROM detector_template;"
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
     }
 }
 
@@ -292,8 +300,9 @@ impl fmt::Debug for SqliteScanPathService {
 
 mod error {
     use std::error::Error;
-    use std::fmt::{self, Display};
+    use std::fmt::{self, Debug, Display};
 
+    use crate::paths::InvalidPathTemplate;
     use crate::template::PathTemplateError;
 
     /// Something that went wrong in the chain of querying the database for a template and
@@ -381,8 +390,8 @@ mod error {
                 Self::NotConfigured => {
                     f.write_str("No directory configured for the given beamline")
                 }
-                Self::NotAccessible(e) => e.fmt(f),
-                Self::NotReabable(e) => e.fmt(f),
+                Self::NotAccessible(e) => write!(f, "{e}"),
+                Self::NotReabable(e) => write!(f, "{e}"),
             }
         }
     }
@@ -406,6 +415,42 @@ mod error {
     impl From<sqlx::Error> for SqliteNumberDirectoryError {
         fn from(value: sqlx::Error) -> Self {
             Self::NotAccessible(value)
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum InsertTemplateError {
+        Db(sqlx::Error),
+        Invalid(InvalidPathTemplate),
+    }
+
+    impl Display for InsertTemplateError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                InsertTemplateError::Db(e) => write!(f, "Error inserting template: {e}"),
+                InsertTemplateError::Invalid(e) => write!(f, "Template was not valid: {e}"),
+            }
+        }
+    }
+
+    impl Error for InsertTemplateError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            match self {
+                InsertTemplateError::Db(e) => Some(e),
+                InsertTemplateError::Invalid(e) => Some(e),
+            }
+        }
+    }
+
+    impl From<InvalidPathTemplate> for InsertTemplateError {
+        fn from(value: InvalidPathTemplate) -> Self {
+            Self::Invalid(value)
+        }
+    }
+
+    impl From<sqlx::Error> for InsertTemplateError {
+        fn from(value: sqlx::Error) -> Self {
+            Self::Db(value)
         }
     }
 }

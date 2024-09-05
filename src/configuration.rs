@@ -6,7 +6,8 @@ use std::path::Path;
 use inquire::Select;
 
 use crate::cli::{BeamlineConfig, ConfigAction, TemplateAction, TemplateConfig, TemplateKind};
-use crate::db_service::{SqliteScanPathService, TemplateOption};
+use crate::db_service::{InsertTemplateError, SqliteScanPathService, TemplateOption};
+use crate::paths::InvalidPathTemplate;
 
 pub async fn configure(db: &Path, opts: ConfigAction) -> Result<(), ConfigError> {
     let db = SqliteScanPathService::connect(db).await.unwrap();
@@ -41,33 +42,24 @@ async fn configure_template(
     db: &SqliteScanPathService,
     opts: TemplateConfig,
 ) -> Result<(), ConfigError> {
-    Ok(match opts.action {
-        TemplateAction::Add { kind, template } => match kind {
-            TemplateKind::Visit => {
-                println!("Adding visit template: {template:?}");
-                db.get_or_insert_visit_template(template).await?;
-            }
-            TemplateKind::Scan => {
-                println!("Adding scan template: {template:?}");
-                db.get_or_insert_scan_template(template).await?;
-            }
-            TemplateKind::Detector => {
-                println!("Adding detector template: {template:?}");
-                db.get_or_insert_detector_template(template).await?;
-            }
-        },
+    match opts.action {
+        TemplateAction::Add { kind, template } => {
+            println!("Adding {kind:?} template: {template:?}");
+            db.insert_template(kind, template).await?;
+        }
         TemplateAction::List { filter } => {
             if let Some(TemplateKind::Visit) | None = filter {
-                list_templates("Visit", &db.get_visit_templates().await?)
+                list_templates("Visit", &db.get_templates(TemplateKind::Visit).await?)
             }
             if let Some(TemplateKind::Scan) | None = filter {
-                list_templates("Scan", &db.get_scan_templates().await?)
+                list_templates("Scan", &db.get_templates(TemplateKind::Scan).await?)
             }
             if let Some(TemplateKind::Detector) | None = filter {
-                list_templates("Detector", &db.get_detector_templates().await?)
+                list_templates("Detector", &db.get_templates(TemplateKind::Detector).await?)
             }
         }
-    })
+    }
+    Ok(())
 }
 
 fn list_templates(heading: &str, templates: &[TemplateOption]) {
@@ -92,23 +84,15 @@ async fn new_template(
     db: &SqliteScanPathService,
     kind: TemplateKind,
     template: String,
-) -> Result<i64, sqlx::Error> {
-    match kind {
-        TemplateKind::Visit => db.get_or_insert_visit_template(template).await,
-        TemplateKind::Scan => db.get_or_insert_scan_template(template).await,
-        TemplateKind::Detector => db.get_or_insert_detector_template(template).await,
-    }
+) -> Result<i64, ConfigError> {
+    Ok(db.insert_template(kind, template).await?)
 }
 
 async fn choose_template(
     db: &SqliteScanPathService,
     kind: TemplateKind,
 ) -> Result<i64, ConfigError> {
-    let templates = match kind {
-        TemplateKind::Visit => db.get_visit_templates().await,
-        TemplateKind::Scan => db.get_scan_templates().await,
-        TemplateKind::Detector => db.get_detector_templates().await,
-    }?;
+    let templates = db.get_templates(kind).await?;
 
     Select::new(&format!("Choose a {kind:?} template: "), templates)
         .prompt()
@@ -118,8 +102,9 @@ async fn choose_template(
 
 #[derive(Debug)]
 pub enum ConfigError {
-    Db(sqlx::Error),
     Cancelled,
+    Db(sqlx::Error),
+    InvalidTemplate(InvalidPathTemplate),
 }
 
 impl From<sqlx::Error> for ConfigError {
@@ -128,11 +113,21 @@ impl From<sqlx::Error> for ConfigError {
     }
 }
 
+impl From<InsertTemplateError> for ConfigError {
+    fn from(value: InsertTemplateError) -> Self {
+        match value {
+            InsertTemplateError::Db(e) => Self::Db(e),
+            InsertTemplateError::Invalid(e) => Self::InvalidTemplate(e),
+        }
+    }
+}
+
 impl Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::Db(db) => write!(f, "Error reading/writing to DB: {db}"),
             ConfigError::Cancelled => write!(f, "User cancelled operation"),
+            ConfigError::Db(db) => write!(f, "Error reading/writing to DB: {db}"),
+            ConfigError::InvalidTemplate(e) => write!(f, "Template was not valid: {e}"),
         }
     }
 }
@@ -140,8 +135,9 @@ impl Display for ConfigError {
 impl Error for ConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            ConfigError::Db(db) => Some(db),
             ConfigError::Cancelled => None,
+            ConfigError::Db(db) => Some(db),
+            ConfigError::InvalidTemplate(e) => Some(e),
         }
     }
 }

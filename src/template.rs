@@ -253,12 +253,6 @@ impl<F> Template<F> {
     }
 }
 
-impl<F: PartialEq> Template<F> {
-    pub fn references(&self, field: &F) -> bool {
-        self.referenced_fields().any(|f| f == field)
-    }
-}
-
 impl<F: TryFrom<String>> PathTemplate<F> {
     pub fn new<S: AsRef<str>>(template: S) -> Result<Self, PathTemplateError> {
         let path = PathBuf::from(template.as_ref());
@@ -299,12 +293,6 @@ impl<F> PathTemplate<F> {
     /// referenced multiple times in the path.
     pub fn referenced_fields(&self) -> impl Iterator<Item = &F> {
         self.parts.iter().flat_map(|t| t.referenced_fields())
-    }
-}
-
-impl<F: PartialEq> PathTemplate<F> {
-    pub fn references(&self, field: &F) -> bool {
-        self.referenced_fields().any(|f| f == field)
     }
 }
 

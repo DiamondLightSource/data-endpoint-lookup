@@ -23,12 +23,18 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use tokio::net::TcpListener;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::cli::ServeOptions;
 use crate::context::{BeamlineContext, ScanService, Subdirectory, VisitService};
 use crate::db_service::SqliteScanPathService;
+
+mod auth;
+
 pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db).await.unwrap();
     let schema = Schema::build(Query, Mutation, EmptySubscription)
@@ -55,9 +61,15 @@ async fn graphiql() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn graphql_handler(
     schema: Extension<Schema<Query, Mutation, EmptySubscription>>,
+    TypedHeader(auth_token): TypedHeader<Authorization<Bearer>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    schema.execute(req.into_inner()).await.into()
+    debug!(?auth_token, "Auth token present");
+    println!("{:?}", auth_token.token());
+    schema
+        .execute(req.into_inner().data(auth_token))
+        .await
+        .into()
 }
 
 /// Read-only API for GraphQL
@@ -211,6 +223,8 @@ impl Mutation {
         visit: String,
         sub: Option<String>,
     ) -> async_graphql::Result<ScanPaths> {
+        let token = ctx.data::<Authorization<Bearer>>()?;
+        auth::check(token, &beamline, &visit).await?;
         let db = ctx.data::<SqliteScanPathService>()?;
         let service = VisitService::new(db.clone(), BeamlineContext::new(beamline, visit));
         let sub = Subdirectory::new(sub.unwrap_or_default())?;

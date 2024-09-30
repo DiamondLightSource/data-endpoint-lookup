@@ -30,6 +30,9 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use chrono::{Datelike, Local};
 use tokio::net::TcpListener;
 use tracing::{info, instrument, trace, warn};
@@ -44,6 +47,8 @@ use crate::paths::{
     VisitTemplate,
 };
 use crate::template::{FieldSource, PathTemplate};
+
+mod auth;
 
 pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db)
@@ -82,10 +87,13 @@ async fn graphiql() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn graphql_handler(
     schema: Extension<Schema<Query, Mutation, EmptySubscription>>,
+    TypedHeader(auth_token): TypedHeader<Authorization<Bearer>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    let inner = req.into_inner();
-    schema.execute(inner).await.into()
+    schema
+        .execute(req.into_inner().data(auth_token))
+        .await
+        .into()
 }
 
 /// Read-only API for GraphQL
@@ -280,6 +288,8 @@ impl Mutation {
         visit: String,
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
+        let token = ctx.data::<Authorization<Bearer>>()?;
+        auth::check(token, &beamline, &visit).await?;
         let db = ctx.data::<SqliteScanPathService>()?;
         let nt = ctx.data::<NumTracker>()?;
         // There is a race condition here if a process increments the file

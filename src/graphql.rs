@@ -60,7 +60,7 @@ pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
         .extension(Tracing)
         .limit_directives(32)
         .data(db)
-        .data(PolicyCheck::new(auth::OPA.into()).await)
+        .data(opts.policy().map(PolicyCheck::new))
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
@@ -288,8 +288,9 @@ impl Mutation {
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
         let token = ctx.data::<Authorization<Bearer>>()?;
-        let policy = ctx.data::<PolicyCheck>()?;
-        policy.check(token, &beamline, &visit).await?;
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            policy.check(token, &beamline, &visit).await?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         // There is a race condition here if a process increments the file
         // while the DB is being queried or between the two queries but there

@@ -58,6 +58,9 @@ pub struct ServeOptions {
     /// The port to open for requests
     #[clap(short, long, default_value_t = 8000, env = "NUMTRACKER_PORT")]
     port: u16,
+    /// Beamline Policy Endpoint
+    #[clap(long)]
+    policy: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -109,6 +112,10 @@ impl Verbosity {
 impl ServeOptions {
     pub(crate) fn addr(&self) -> (Ipv4Addr, u16) {
         (self.host, self.port)
+    }
+
+    pub(crate) fn policy(&self) -> Option<&str> {
+        self.policy.as_deref()
     }
 }
 

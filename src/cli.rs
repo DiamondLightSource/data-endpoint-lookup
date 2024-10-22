@@ -61,6 +61,9 @@ pub struct ServeOptions {
     /// The root directory for external number tracking
     #[clap(long, env = "NUMTRACKER_ROOT_DIRECTORY")]
     root_directory: Option<PathBuf>,
+    /// Beamline Policy Endpoint
+    #[clap(long)]
+    policy: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -115,6 +118,10 @@ impl ServeOptions {
     }
     pub(crate) fn root_directory(&self) -> Option<PathBuf> {
         self.root_directory.clone()
+    }
+
+    pub(crate) fn policy(&self) -> Option<&str> {
+        self.policy.as_deref()
     }
 }
 

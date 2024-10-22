@@ -41,7 +41,7 @@ pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let schema = Schema::build(Query, Mutation, EmptySubscription)
         .extension(Tracing)
         .data(db)
-        .data(PolicyCheck::new(auth::OPA.into()).await)
+        .data(opts.policy().map(PolicyCheck::new))
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
@@ -226,8 +226,9 @@ impl Mutation {
         sub: Option<String>,
     ) -> async_graphql::Result<ScanPaths> {
         let token = ctx.data::<Authorization<Bearer>>()?;
-        let policy = ctx.data::<PolicyCheck>()?;
-        policy.check(token, &beamline, &visit).await?;
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            policy.check(token, &beamline, &visit).await?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         let service = VisitService::new(db.clone(), BeamlineContext::new(beamline, visit));
         let sub = Subdirectory::new(sub.unwrap_or_default())?;

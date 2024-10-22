@@ -1,10 +1,9 @@
 use std::fmt::Display;
+use std::str::FromStr;
 
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use serde::{Deserialize, Serialize};
-
-const OPA: &'static str = "http://localhost:8181/v1/data/numtracks/state";
 
 #[derive(Debug, Serialize)]
 struct Input<'a> {
@@ -54,8 +53,8 @@ impl FromStr for Visit {
 pub(crate) struct PolicyCheck(reqwest::Client, String);
 
 impl PolicyCheck {
-    pub async fn new(host: String) -> Self {
-        Self(reqwest::Client::new(), host)
+    pub fn new<S: Into<String>>(endpoint: S) -> Self {
+        Self(reqwest::Client::new(), endpoint.into())
     }
     pub async fn check(
         &self,

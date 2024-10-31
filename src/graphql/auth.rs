@@ -93,47 +93,6 @@ impl PolicyCheck {
     }
 }
 
-pub(crate) async fn check(
-    token: &Authorization<Bearer>,
-    beamline: &str,
-    visit: &str,
-) -> Result<(), AuthError> {
-    let client = reqwest::Client::new();
-    let (prop, vis) = visit.split_once('-').ok_or(AuthError::Failed)?;
-    let prop = prop
-        .chars()
-        .skip_while(|p| !p.is_ascii_digit())
-        .collect::<String>();
-
-    let query = Input {
-        input: Request {
-            user: token.token(),
-            proposal: prop.parse().map_err(|_| AuthError::Failed)?,
-            visit: vis.parse().map_err(|_| AuthError::Failed)?,
-        },
-    };
-    let response = client.post(OPA).json(&query).send().await?;
-    let response = response
-        .json::<Response>()
-        .await
-        .map_err(|e| {
-            dbg!(e);
-            AuthError::Failed
-        })?
-        .result;
-    dbg!(&response);
-    if !response.access {
-        Err(AuthError::Failed)
-    } else if response.beamline != beamline {
-        Err(AuthError::BeamlineMismatch {
-            expected: beamline.into(),
-            actual: response.beamline,
-        })
-    } else {
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 pub enum AuthError {
     ServerError(reqwest::Error),

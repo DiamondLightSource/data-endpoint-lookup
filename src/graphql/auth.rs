@@ -5,6 +5,8 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use serde::{Deserialize, Serialize};
 
+const AUDIENCE: &str = "account";
+
 #[derive(Debug, Serialize)]
 struct Input<'a> {
     input: Request<'a>,
@@ -12,7 +14,8 @@ struct Input<'a> {
 
 #[derive(Debug, Serialize)]
 struct Request<'a> {
-    user: &'a str,
+    token: &'a str,
+    audience: &'a str,
     proposal: u32,
     visit: u16,
 }
@@ -65,7 +68,8 @@ impl PolicyCheck {
         let visit: Visit = visit.parse().map_err(|_| AuthError::Failed)?;
         let query = Input {
             input: Request {
-                user: token.token(),
+                token: token.token(),
+                audience: AUDIENCE,
                 proposal: visit.1,
                 visit: visit.2,
             },

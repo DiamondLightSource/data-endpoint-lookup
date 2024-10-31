@@ -28,7 +28,7 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use tokio::net::TcpListener;
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::cli::ServeOptions;
 use crate::context::{BeamlineContext, ScanService, Subdirectory, VisitService};
@@ -66,8 +66,6 @@ async fn graphql_handler(
     TypedHeader(auth_token): TypedHeader<Authorization<Bearer>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    debug!(?auth_token, "Auth token present");
-    println!("{:?}", auth_token.token());
     schema
         .execute(req.into_inner().data(auth_token))
         .await

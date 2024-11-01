@@ -61,10 +61,11 @@ impl PolicyCheck {
     }
     pub async fn check(
         &self,
-        token: &Authorization<Bearer>,
+        token: Option<&Authorization<Bearer>>,
         beamline: &str,
         visit: &str,
     ) -> Result<(), AuthError> {
+        let token = token.ok_or(AuthError::Missing)?;
         let visit: Visit = visit.parse().map_err(|_| AuthError::Failed)?;
         let query = Input {
             input: Request {
@@ -98,6 +99,7 @@ pub enum AuthError {
     ServerError(reqwest::Error),
     Failed,
     BeamlineMismatch { expected: String, actual: String },
+    Missing,
 }
 
 impl Display for AuthError {
@@ -109,6 +111,7 @@ impl Display for AuthError {
                 f,
                 "Invalid beamline. Expected: {expected}, actual: {actual}"
             ),
+            AuthError::Missing => f.write_str("No authenication token was provided"),
         }
     }
 }

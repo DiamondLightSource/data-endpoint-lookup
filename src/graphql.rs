@@ -89,7 +89,7 @@ async fn graphiql() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn graphql_handler(
     schema: Extension<Schema<Query, Mutation, EmptySubscription>>,
-    TypedHeader(auth_token): TypedHeader<Authorization<Bearer>>,
+    auth_token: Option<TypedHeader<Authorization<Bearer>>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     schema
@@ -290,8 +290,8 @@ impl Mutation {
         visit: String,
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
-        let token = ctx.data::<Authorization<Bearer>>()?;
         if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            let token = ctx.data::<Authorization<Bearer>>().ok();
             policy.check(token, &beamline, &visit).await?;
         }
         let db = ctx.data::<SqliteScanPathService>()?;

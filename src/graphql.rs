@@ -123,11 +123,12 @@ impl VisitPath {
 
 #[Object]
 impl ScanPaths {
-    /// The visit used to generate this scan information
-    /// Should be the same as the visit passed in
+    /// Information about the visit that isn't dependent on a specific scan
     #[instrument(skip(self))]
-    async fn visit(&self) -> &str {
-        self.service.visit()
+    async fn visit(&self) -> VisitPath {
+        VisitPath {
+            service: self.service.as_visit_service(),
+        }
     }
 
     /// The root scan file for this scan. The path has no extension so that the format can be
@@ -141,25 +142,6 @@ impl ScanPaths {
     #[instrument(skip(self))]
     async fn scan_number(&self) -> usize {
         self.service.scan_number()
-    }
-
-    /// The beamline used to generate this scan information
-    /// Should be the same as the beamline passed in.
-    #[instrument(skip(self))]
-    async fn beamline(&self) -> &str {
-        self.service.beamline()
-    }
-
-    /// The root visit directory for the given visit/beamline.
-    ///
-    /// This is not necessarily the directory where data should be written if subdirectories are
-    /// being used, or if detectors should be writing their files to a new directory for each scan.
-    /// Use `scan_file` and `detectors` to determine where specific files should be written.
-    #[instrument(skip(self))]
-    async fn directory(&self) -> async_graphql::Result<String> {
-        Ok(NonUnicodePath::check(
-            self.service.visit_directory().await?,
-        )?)
     }
 
     /// The paths where the given detectors should write their files.

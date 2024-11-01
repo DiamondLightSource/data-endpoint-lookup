@@ -87,6 +87,12 @@ impl<'bl> VisitService {
 }
 
 impl ScanService {
+    pub fn as_visit_service(&self) -> VisitService {
+        VisitService {
+            db: self.db.clone(),
+            ctx: self.ctx.beamline.clone(),
+        }
+    }
     #[instrument(skip(self))]
     pub fn scan_number(&self) -> usize {
         self.ctx.scan_number

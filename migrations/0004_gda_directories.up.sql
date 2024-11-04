@@ -1,15 +1,15 @@
-CREATE TABLE number_file_directory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    beamline INTEGER REFERENCES beamline(id) NOT NULL,
-    directory TEXT NOT NULL,
-    extension TEXT NOT NULL,
-    UNIQUE (beamline), -- only one entry per beamline
-    UNIQUE (directory, extension) -- avoid collisions between beamlines
-);
+-- CREATE TABLE number_file_directory (
+--     id INTEGER PRIMARY KEY AUTOINCREMENT,
+--     beamline INTEGER REFERENCES beamline(id) NOT NULL,
+--     directory TEXT NOT NULL,
+--     extension TEXT NOT NULL,
+--     UNIQUE (beamline), -- only one entry per beamline
+--     UNIQUE (directory, extension) -- avoid collisions between beamlines
+-- );
 
-CREATE VIEW beamline_number_file_directory (beamline, directory, extension) AS SELECT
-beamline.name as beamline,
-number_file_directory.directory as directory,
-extension
-FROM beamline
-JOIN number_file_directory ON beamline.id = number_file_directory.beamline;
+-- CREATE VIEW beamline_number_file_directory (beamline, directory, extension) AS SELECT
+-- beamline.name as beamline,
+-- number_file_directory.directory as directory,
+-- extension
+-- FROM beamline
+-- JOIN number_file_directory ON beamline.id = number_file_directory.beamline;

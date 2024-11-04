@@ -18,9 +18,9 @@ use std::path::Path;
 use error::UpdateSingleError;
 use futures::Stream;
 use sqlx::prelude::FromRow;
-use sqlx::query::{Query, QueryScalar};
-use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions};
-use sqlx::{query_as, query_file, query_file_as, query_file_scalar, Sqlite, SqlitePool};
+use sqlx::query::{Query, QueryScalar, QueryScalar};
+use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteConnectOptions};
+use sqlx::{query_as, query_scalar};
 use tracing::{debug, info, instrument, warn};
 
 pub use self::error::{
@@ -118,6 +118,18 @@ impl SqliteScanPathService {
                 Ok(())
             }
         }
+    }
+
+    pub async fn insert_beamline(&self, beamline: &str) -> Result<i64, SqliteNumberError> {
+        Ok(self
+            .get_or_insert(
+                query_scalar!(
+                    "INSERT INTO beamline (name) VALUES (?) ON CONFLICT DO NOTHING RETURNING id;",
+                    beamline
+                ),
+                || query_scalar!("SELECT (id) FROM beamline WHERE name = ?", beamline),
+            )
+            .await?)
     }
 
     pub async fn next_scan_number(&self, beamline: &str) -> Result<usize, SqliteNumberError> {
@@ -231,6 +243,29 @@ impl SqliteScanPathService {
         }
     }
 
+    async fn update_single<'q>(
+        &self,
+        query: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Result<(), sqlx::Error> {
+        let mut trn = self.pool.begin().await?;
+        let res = query.execute(&mut *trn).await?;
+        match res.rows_affected() {
+            0 => panic!("No entries updated"),
+            n @ 2.. => panic!("Two many entries updated ({n})"),
+            _ => trn.commit().await?,
+        }
+        // if res.rows_affected() != 1 {
+        //     trn.rollback().await?;
+        //     panic!(
+        //         "Incorrect number of entries updated: {}",
+        //         res.rows_affected()
+        //     );
+        // } else {
+        //     trn.commit().await?;
+        // }
+        Ok(())
+    }
+
     pub async fn set_beamline_template(
         &self,
         bl: &str,
@@ -243,22 +278,30 @@ impl SqliteScanPathService {
         );
         match kind {
             TemplateKind::Visit => {
-                query_file!("queries/set_visit_template.sql", template_id, bl)
-                    .execute(&self.pool)
-                    .await?
+                self.update_single(query_file!(
+                    "queries/set_visit_template.sql",
+                    template_id,
+                    bl
+                ))
+                .await
             }
             TemplateKind::Scan => {
-                query_file!("queries/set_scan_template.sql", template_id, bl)
-                    .execute(&self.pool)
-                    .await?
+                self.update_single(query_file!(
+                    "queries/set_scan_template.sql",
+                    template_id,
+                    bl
+                ))
+                .await
             }
             TemplateKind::Detector => {
-                query_file!("queries/set_detector_template.sql", template_id, bl)
-                    .execute(&self.pool)
-                    .await?
+                self.update_single(query_file!(
+                    "queries/set_detector_template.sql",
+                    template_id,
+                    bl
+                ))
+                .await
             }
-        };
-        Ok(())
+        }
     }
 
     pub async fn insert_beamline(&self, beamline: &str) -> Result<i64, sqlx::Error> {

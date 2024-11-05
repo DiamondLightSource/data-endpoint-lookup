@@ -20,20 +20,28 @@ use async_graphql::extensions::Tracing;
 use async_graphql::http::GraphiQLSource;
 use async_graphql::{Context, EmptySubscription, Object, Schema, SimpleObject};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use auth::PolicyCheck;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use tokio::net::TcpListener;
 use tracing::instrument;
 
 use crate::cli::ServeOptions;
 use crate::context::{BeamlineContext, ScanService, Subdirectory, VisitService};
 use crate::db_service::SqliteScanPathService;
+
+mod auth;
+
 pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db).await.unwrap();
     let schema = Schema::build(Query, Mutation, EmptySubscription)
         .extension(Tracing)
         .data(db)
+        .data(opts.policy().map(PolicyCheck::new))
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
@@ -55,9 +63,13 @@ async fn graphiql() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn graphql_handler(
     schema: Extension<Schema<Query, Mutation, EmptySubscription>>,
+    auth_token: Option<TypedHeader<Authorization<Bearer>>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    schema.execute(req.into_inner()).await.into()
+    schema
+        .execute(req.into_inner().data(auth_token))
+        .await
+        .into()
 }
 
 /// Read-only API for GraphQL
@@ -211,6 +223,10 @@ impl Mutation {
         visit: String,
         sub: Option<String>,
     ) -> async_graphql::Result<ScanPaths> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            let token = ctx.data::<Authorization<Bearer>>().ok();
+            policy.check(token, &beamline, &visit).await?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         let service = VisitService::new(db.clone(), BeamlineContext::new(beamline, visit));
         let sub = Subdirectory::new(sub.unwrap_or_default())?;

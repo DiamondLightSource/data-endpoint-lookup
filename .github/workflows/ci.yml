@@ -1,0 +1,35 @@
+name: Numtracker CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: stable
+          components: rustfmt, clippy
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Check formating
+      run: cargo fmt -- --check
+
+    - name: Clippy
+      run: |
+        cargo --version
+        cargo clippy --version
+        cargo clippy --all-targets --all-features -- --deny warnings
+
+    - name: Check formating
+      run: cargo fmt -- --check
+
+    - name: Run tests
+      run: cargo test --verbose

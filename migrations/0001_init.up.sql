@@ -1,5 +1,5 @@
 CREATE TABLE beamline (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     -- Default to 0 so scan numbering starts at 1
     scan_number INTEGER NOT NULL DEFAULT 0 CHECK (scan_number >= 0),

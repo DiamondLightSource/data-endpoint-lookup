@@ -124,7 +124,7 @@ pub trait PathSpec {
     const REQUIRED: &'static [Self::Field];
     const ABSOLUTE: bool;
 
-    fn validate(path: &str) -> Result<(), InvalidPathTemplate> {
+    fn new_checked(path: &str) -> Result<PathTemplate<Self::Field>, InvalidPathTemplate> {
         let template = PathTemplate::new(path)?;
         match (Self::ABSOLUTE, template.is_absolute()) {
             (true, false) => Err(InvalidPathTemplate::ShouldBeAbsolute),
@@ -137,7 +137,7 @@ pub trait PathSpec {
                 return Err(InvalidPathTemplate::MissingField(f.to_string()));
             }
         }
-        Ok(())
+        Ok(template)
     }
 }
 

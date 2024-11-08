@@ -28,3 +28,7 @@ tracing = "0.1.40"
 tracing-opentelemetry = "0.25.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 url = "2.5.2"
+
+[dev-dependencies]
+async-std = { version = "1.13.0", features = ["attributes"], default-features = false }
+rstest = "0.23.0"

@@ -194,7 +194,7 @@ impl From<TemplateError> for PathTemplateError {
 }
 
 impl<F: TryFrom<String>> Template<F> {
-    pub fn new<S: AsRef<str>>(template: S) -> Result<Self, TemplateError> {
+    fn new<S: AsRef<str>>(template: S) -> Result<Self, TemplateError> {
         let mut parts = vec![];
         let mut state = ParseState::Init;
         for (i, c) in template.as_ref().chars().enumerate() {
@@ -268,7 +268,7 @@ impl<F> Template<F> {
 }
 
 impl<F: TryFrom<String>> PathTemplate<F> {
-    pub fn new<S: AsRef<str>>(template: S) -> Result<Self, PathTemplateError> {
+    pub(super) fn new<S: AsRef<str>>(template: S) -> Result<Self, PathTemplateError> {
         let path = PathBuf::from(template.as_ref());
         let mut parts = Vec::new();
         let mut kind = PathType::Relative;

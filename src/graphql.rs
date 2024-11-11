@@ -33,7 +33,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Router};
 use chrono::{Datelike, Local};
 use tokio::net::TcpListener;
-use tracing::{instrument, warn};
+use tracing::{instrument, trace, warn};
 
 use crate::cli::ServeOptions;
 use crate::db_service::{
@@ -273,12 +273,10 @@ impl Mutation {
         let fallback = current
             .fallback()
             .and_then(|fb| GdaNumTracker::new(&fb.directory, &fb.extension).ok());
-        dbg!(&fallback);
         let prev = match &fallback {
             Some(nt) => Some(nt.latest_scan_number().await?),
             None => None,
         };
-        dbg!(prev);
 
         let next_scan = db.next_scan_configuration(&beamline, prev).await?;
         if let Some(nt) = &fallback {
@@ -304,8 +302,8 @@ impl Mutation {
         config: Option<ConfigurationUpdates>,
     ) -> async_graphql::Result<BeamlineConfiguration> {
         let db = ctx.data::<SqliteScanPathService>()?;
-        println!("Configuring: {beamline}: {config:?}");
-        match config {
+        trace!("Configuring: {beamline}: {config:?}");
+        match config.filter(|c| !c.is_empty()) {
             None => Ok(db.current_configuration(&beamline).await?),
             Some(cfg) => {
                 let upd = cfg.into_update(beamline);
@@ -329,6 +327,14 @@ struct ConfigurationUpdates {
 }
 
 impl ConfigurationUpdates {
+    fn is_empty(&self) -> bool {
+        self.scan_number.is_none()
+            && self.visit.is_none()
+            && self.scan.is_none()
+            && self.detector.is_none()
+            && self.directory.is_none()
+            && self.extension.is_none()
+    }
     fn into_update(self, name: String) -> BeamlineConfigurationUpdate {
         BeamlineConfigurationUpdate {
             name,

@@ -123,20 +123,11 @@ pub struct BeamlineConfigurationUpdate {
 }
 
 impl BeamlineConfigurationUpdate {
-    pub fn is_empty(&self) -> bool {
-        self.scan_number.is_none()
-            && self.visit.is_none()
-            && self.scan.is_none()
-            && self.detector.is_none()
-            && self.directory.is_none()
-            && self.extension.is_none()
-    }
-
+    // May panic if the update is empty - check first
     pub async fn update_beamline(
         &self,
         db: &SqliteScanPathService,
     ) -> Result<Option<BeamlineConfiguration>, sqlx::Error> {
-        assert!(!self.is_empty(), "Cannot update beamline with empty update");
         let mut q: QueryBuilder<Sqlite> = QueryBuilder::new("UPDATE beamline SET ");
         let mut fields = q.separated(", ");
         if let Some(num) = self.scan_number {

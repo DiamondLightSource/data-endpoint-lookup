@@ -5,9 +5,9 @@ CREATE TABLE beamline (
     scan_number INTEGER NOT NULL DEFAULT 0 CHECK (scan_number >= 0),
 
     -- Directory and file templates
-    visit TEXT CHECK (length(visit) > 0),
-    scan TEXT CHECK (length(scan) > 0),
-    detector TEXT CHECK (length(detector) > 0),
+    visit TEXT NOT NULL CHECK (length(visit) > 0),
+    scan TEXT NOT NULL CHECK (length(scan) > 0),
+    detector TEXT NOT NULL CHECK (length(detector) > 0),
 
     fallback_directory TEXT,
     fallback_extension TEXT,

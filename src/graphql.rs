@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any;
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
+use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use async_graphql::extensions::Tracing;
 use async_graphql::http::GraphiQLSource;
+use async_graphql::registry::{MetaType, MetaTypeId, Registry};
 use async_graphql::{
-    Context, EmptySubscription, InputValueError, InputValueResult, Object, Scalar, ScalarType,
-    Schema, SimpleObject, Value,
+    Context, EmptySubscription, InputObject, InputType, InputValueError, InputValueResult, Object,
+    Scalar, ScalarType, Schema, SimpleObject, Value,
 };
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::response::{Html, IntoResponse};
@@ -31,10 +36,15 @@ use tokio::net::TcpListener;
 use tracing::{instrument, warn};
 
 use crate::cli::ServeOptions;
-use crate::db_service::{BeamlineConfiguration, SqliteScanPathService};
+use crate::db_service::{
+    BeamlineConfiguration, BeamlineConfigurationUpdate, SqliteScanPathService,
+};
 use crate::numtracker::GdaNumTracker;
-use crate::paths::{BeamlineField, DetectorField, ScanField};
-use crate::template::FieldSource;
+use crate::paths::{
+    BeamlineField, DetectorField, DetectorTemplate, PathSpec, ScanField, ScanTemplate,
+    VisitTemplate,
+};
+use crate::template::{FieldSource, PathTemplate};
 
 pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db)
@@ -136,7 +146,7 @@ impl VisitPath {
 }
 
 impl FieldSource<BeamlineField> for VisitPath {
-    fn resolve(&self, field: &BeamlineField) -> std::borrow::Cow<'_, str> {
+    fn resolve(&self, field: &BeamlineField) -> Cow<'_, str> {
         match field {
             BeamlineField::Year => Local::now().year().to_string().into(),
             BeamlineField::Visit => self.visit.as_str().into(),
@@ -194,8 +204,24 @@ impl ScanPaths {
     }
 }
 
+#[Object]
+impl BeamlineConfiguration {
+    pub async fn visit_template(&self) -> async_graphql::Result<String> {
+        Ok(self.visit()?.to_string())
+    }
+    pub async fn scan_template(&self) -> async_graphql::Result<String> {
+        Ok(self.scan()?.to_string())
+    }
+    pub async fn detector_template(&self) -> async_graphql::Result<String> {
+        Ok(self.detector()?.to_string())
+    }
+    pub async fn latest_scan_number(&self) -> async_graphql::Result<u32> {
+        Ok(self.scan_number())
+    }
+}
+
 impl FieldSource<ScanField> for ScanPaths {
-    fn resolve(&self, field: &ScanField) -> std::borrow::Cow<'_, str> {
+    fn resolve(&self, field: &ScanField) -> Cow<'_, str> {
         match field {
             ScanField::Subdirectory => self.subdirectory.to_string().into(),
             ScanField::ScanNumber => self.visit.info.scan_number().to_string().into(),
@@ -205,7 +231,7 @@ impl FieldSource<ScanField> for ScanPaths {
 }
 
 impl FieldSource<DetectorField> for (&str, &ScanPaths) {
-    fn resolve(&self, field: &DetectorField) -> std::borrow::Cow<'_, str> {
+    fn resolve(&self, field: &DetectorField) -> Cow<'_, str> {
         match field {
             DetectorField::Detector => self.0.into(),
             DetectorField::Scan(s) => self.1.resolve(s),
@@ -269,7 +295,104 @@ impl Mutation {
             subdirectory: sub.unwrap_or_default(),
         })
     }
+
+    #[instrument(skip(self, ctx))]
+    async fn configure<'ctx>(
+        &self,
+        ctx: &Context<'ctx>,
+        beamline: String,
+        config: Option<ConfigurationUpdates>,
+    ) -> async_graphql::Result<BeamlineConfiguration> {
+        let db = ctx.data::<SqliteScanPathService>()?;
+        println!("Configuring: {beamline}: {config:?}");
+        match config {
+            None => Ok(db.current_configuration(&beamline).await?),
+            Some(cfg) => {
+                let upd = cfg.into_update(beamline);
+                match upd.update_beamline(&db).await? {
+                    Some(bc) => Ok(bc),
+                    None => Ok(upd.insert_new(db).await?),
+                }
+            }
+        }
+    }
 }
+
+#[derive(Debug, InputObject)]
+struct ConfigurationUpdates {
+    visit: Option<InputTemplate<VisitTemplate>>,
+    scan: Option<InputTemplate<ScanTemplate>>,
+    detector: Option<InputTemplate<DetectorTemplate>>,
+    scan_number: Option<u32>,
+    directory: Option<String>,
+    extension: Option<String>,
+}
+
+impl ConfigurationUpdates {
+    fn into_update(self, name: String) -> BeamlineConfigurationUpdate {
+        BeamlineConfigurationUpdate {
+            name,
+            scan_number: self.scan_number,
+            visit: self.visit.map(|t| t.0),
+            scan: self.scan.map(|t| t.0),
+            detector: self.detector.map(|t| t.0),
+            directory: self.directory,
+            extension: self.extension,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct InputTemplate<S: PathSpec>(PathTemplate<S::Field>, PhantomData<S>);
+
+impl<S, F> InputType for InputTemplate<S>
+where
+    F: Send + Sync + TryFrom<String> + Display,
+    S: PathSpec<Field = F> + Send + Sync,
+{
+    type RawValueType = PathTemplate<F>;
+    fn parse(value: Option<Value>) -> InputValueResult<Self> {
+        match value.unwrap() {
+            Value::String(txt) => match S::new_checked(&txt) {
+                Ok(pt) => Ok(Self(pt, Default::default())),
+                Err(e) => Err(InputValueError::custom(e)),
+            },
+            other => Err(InputValueError::expected_type(other)),
+        }
+    }
+    fn to_value(&self) -> Value {
+        Value::String(self.0.to_string())
+    }
+
+    fn type_name() -> Cow<'static, str> {
+        // best effort remove the `numtracker::paths::` prefix
+        any::type_name::<S>()
+            .split("::")
+            .last()
+            .expect("There is always a last value for a split")
+            .into()
+    }
+
+    fn create_type_info(registry: &mut Registry) -> String {
+        registry.create_input_type::<Self, _>(MetaTypeId::Scalar, |_| MetaType::Scalar {
+            name: Self::type_name().into(),
+            description: Some("A template with {placeholders} to be replaced at runtime".into()),
+            is_valid: Some(Arc::new(|v| match v {
+                Value::String(_) => true,
+                _ => false,
+            })),
+            visible: None,
+            inaccessible: false,
+            tags: vec![],
+            specified_by_url: None,
+        })
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(&self.0)
+    }
+}
+
 // Derived Default is OK without validation as empty path is a valid subdirectory
 #[derive(Debug, Default)]
 pub struct Subdirectory(String);

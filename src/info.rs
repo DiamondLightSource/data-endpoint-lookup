@@ -56,12 +56,12 @@ async fn list_bl_info(conf: BeamlineConfiguration) {
         extension,
     }) = conf.fallback()
     {
-        match GdaNumTracker::new(&directory)
-            .latest_scan_number(&extension)
-            .await
-        {
-            Ok(latest) => println!("    Numtracker file: {directory}/{latest}.{extension}"),
-            Err(e) => println!("    Numtracker file unavailable: {e}"),
+        match GdaNumTracker::new(&directory, &extension) {
+            Ok(nt) => match nt.latest_scan_number().await {
+                Ok(latest) => println!("    Numtracker file: {directory}/{latest}.{extension}"),
+                Err(e) => println!("    Numtracker file unavailable: {e}"),
+            },
+            Err(e) => println!("Invalid directory confiuration: {e}"),
         }
     } else {
         println!("    No fallback directory configured");

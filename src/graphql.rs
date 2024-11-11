@@ -28,10 +28,11 @@ use axum::routing::{get, post};
 use axum::{Extension, Router};
 use chrono::{Datelike, Local};
 use tokio::net::TcpListener;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::cli::ServeOptions;
 use crate::db_service::{BeamlineConfiguration, SqliteScanPathService};
+use crate::numtracker::GdaNumTracker;
 use crate::paths::{BeamlineField, DetectorField, ScanField};
 use crate::template::FieldSource;
 
@@ -239,29 +240,32 @@ impl Mutation {
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
         let db = ctx.data::<SqliteScanPathService>()?;
-        // TODO: Handle fallback directory
-        // Need to
-        // * Get the latest scan number from directory
-        // * match directory_number
-        //       < db number => create new number file with new number
-        //       == db number => create new number file and delete previous
-        //       > db number => update db number to match, then increment both
-        // Should be atomic/synchronised as DB number may be incremented elsewhere
-        // * Lock directory
-        // * Get highest file
-        // * Get next DB info using max(db_number, file_number) + 1
-        // * Create file for new number
-        // * Delete previous file if present
-        //       leave any other number files so that any discontinuity caused by DB getting ahead
-        //       of directory is visible. Should log warning in this instance.
-        // * Unlock directory
-        //
-        // There is still a race condition if a process that doesn't respect the file lock
-        // increments the file while the DB is being queried but there isn't much we can do from
-        // here.
-        let info = db.next_scan_configuration(&beamline, None).await?;
+        // There is a race condition here if a process increments the file
+        // while the DB is being queried or between the two queries but there
+        // isn't much we can do from here.
+        let current = db.current_configuration(&beamline).await?;
+        let fallback = current
+            .fallback()
+            .and_then(|fb| GdaNumTracker::new(&fb.directory, &fb.extension).ok());
+        dbg!(&fallback);
+        let prev = match &fallback {
+            Some(nt) => Some(nt.latest_scan_number().await?),
+            None => None,
+        };
+        dbg!(prev);
+
+        let next_scan = db.next_scan_configuration(&beamline, prev).await?;
+        if let Some(nt) = &fallback {
+            if let Err(e) = nt.create_num_file(next_scan.scan_number()).await {
+                warn!("Failed to increment fallback tracker directory: {e}");
+            }
+        }
+
         Ok(ScanPaths {
-            visit: VisitPath { visit, info },
+            visit: VisitPath {
+                visit,
+                info: next_scan,
+            },
             subdirectory: sub.unwrap_or_default(),
         })
     }

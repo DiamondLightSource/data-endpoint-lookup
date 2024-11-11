@@ -139,6 +139,8 @@ pub trait PathSpec {
         }
         Ok(template)
     }
+
+    fn describe() -> &'static str;
 }
 
 #[derive(Debug)]
@@ -190,6 +192,9 @@ impl PathSpec for VisitTemplate {
     const REQUIRED: &'static [Self::Field] = &[BeamlineField::Instrument, BeamlineField::Visit];
 
     const ABSOLUTE: bool = true;
+    fn describe() -> &'static str {
+        "A template describing the path to the visit directory for a beamline"
+    }
 }
 
 impl PathSpec for ScanTemplate {
@@ -198,6 +203,9 @@ impl PathSpec for ScanTemplate {
     const REQUIRED: &'static [Self::Field] = &[ScanField::ScanNumber];
 
     const ABSOLUTE: bool = false;
+    fn describe() -> &'static str {
+        "A template describing the location within a visit directory where the root scan file should be written"
+    }
 }
 
 impl PathSpec for DetectorTemplate {
@@ -209,4 +217,14 @@ impl PathSpec for DetectorTemplate {
     ];
 
     const ABSOLUTE: bool = false;
+    fn describe() -> &'static str {
+        concat!(
+            "A template describing the location within a visit directory where ",
+            "the data for a given detector should be written",
+            "\n\n",
+            "It should contain placeholders for {detector} and {scan_number} ",
+            "to ensure paths are unique between scans and for multiple ",
+            "detectors."
+        )
+    }
 }

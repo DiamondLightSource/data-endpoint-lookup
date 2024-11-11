@@ -382,7 +382,7 @@ where
     fn create_type_info(registry: &mut Registry) -> String {
         registry.create_input_type::<Self, _>(MetaTypeId::Scalar, |_| MetaType::Scalar {
             name: Self::type_name().into(),
-            description: Some("A template with {placeholders} to be replaced at runtime".into()),
+            description: Some(S::describe().into()),
             is_valid: Some(Arc::new(|v| match v {
                 Value::String(_) => true,
                 _ => false,

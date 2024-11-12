@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM beamline",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "scan_number",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "visit",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "scan",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "detector",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "fallback_directory",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "fallback_extension",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "02d6faf0ffd8fb96031f7a8e824de4e4552ea72176c5e885cea3e517316e7774"
+}

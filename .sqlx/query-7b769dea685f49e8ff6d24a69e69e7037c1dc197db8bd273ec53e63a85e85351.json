@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE beamline SET scan_number = max(scan_number, ?) + 1 WHERE name = ? RETURNING *",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "scan_number",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "visit",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "scan",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "detector",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "fallback_directory",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "fallback_extension",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7b769dea685f49e8ff6d24a69e69e7037c1dc197db8bd273ec53e63a85e85351"
+}

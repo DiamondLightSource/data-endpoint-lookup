@@ -35,7 +35,7 @@ pub struct SqliteScanPathService {
     pool: SqlitePool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct NumtrackerConfig {
     pub directory: String,
     pub extension: String,
@@ -153,7 +153,7 @@ impl BeamlineConfigurationUpdate {
         if let Some(ext) = &self.extension {
             if ext != &self.name {
                 // extension defaults to beamline name
-                fields.push("fallback_directory=");
+                fields.push("fallback_extension=");
                 fields.push_bind_unseparated(ext);
             }
         }
@@ -184,6 +184,18 @@ impl BeamlineConfigurationUpdate {
             fallback_extension: self.extension,
         };
         Ok(dbc.insert_into(db).await?)
+    }
+    #[cfg(test)]
+    fn empty(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            scan_number: None,
+            visit: None,
+            scan: None,
+            detector: None,
+            directory: None,
+            extension: None,
+        }
     }
 }
 
@@ -394,15 +406,14 @@ mod error {
 #[cfg(test)]
 mod db_tests {
     use rstest::{fixture, rstest};
+    use sqlx::error::{DatabaseError as _, ErrorKind};
+    use sqlx::sqlite::SqliteError;
     use tokio::test;
 
     use super::SqliteScanPathService;
-    use crate::db_service::error::ConfigurationError;
-
-    #[fixture]
-    async fn db() -> SqliteScanPathService {
-        SqliteScanPathService::memory().await
-    }
+    use crate::db_service::error::{ConfigurationError, NewConfigurationError};
+    use crate::db_service::{BeamlineConfiguration, BeamlineConfigurationUpdate};
+    use crate::paths::{DetectorTemplate, PathSpec, ScanTemplate, VisitTemplate};
 
     /// Remove repeated .await.unwrap() noise from tests
     macro_rules! ok {
@@ -411,18 +422,211 @@ mod db_tests {
         };
     }
     /// Remove repeated .await.unwrap_err() noise from tests
+    /// Await the given future, unwrap the err and match it against the expected pattern
     macro_rules! err {
         ($call:expr) => {
             $call.await.unwrap_err()
         };
+        ($exp:path, $call:expr) => {{
+            let e = $call.await.unwrap_err();
+            let $exp(e) = e else {
+                panic!("Unexpected error: {e}");
+            };
+            e
+        }};
+    }
+
+    #[fixture]
+    async fn db() -> SqliteScanPathService {
+        let db = SqliteScanPathService::memory().await;
+        update().insert_new(&db).await.unwrap();
+        db
+    }
+
+    #[fixture]
+    fn update() -> BeamlineConfigurationUpdate {
+        BeamlineConfigurationUpdate {
+            name: "i22".into(),
+            scan_number: Some(122),
+            visit: VisitTemplate::new_checked("/tmp/{instrument}/data/{year}/{visit}").ok(),
+            scan: ScanTemplate::new_checked("{subdirectory}/{instrument}-{scan_number}").ok(),
+            detector: DetectorTemplate::new_checked(
+                "{subdirectory}/{instrument}-{scan_number}-{detector}",
+            )
+            .ok(),
+            directory: Some("/tmp/trackers".into()),
+            extension: Some("ext".into()),
+        }
+    }
+
+    #[test]
+    async fn empty_db_has_no_config() {
+        let db = SqliteScanPathService::memory().await;
+        let e = err!(
+            ConfigurationError::MissingBeamline,
+            db.current_configuration("i22")
+        );
+        assert_eq!(e, "i22")
+    }
+
+    #[rstest]
+    #[case::visit("visit", |u: &mut BeamlineConfigurationUpdate| u.visit = None)]
+    #[case::scan("scan", |u: &mut BeamlineConfigurationUpdate| u.scan = None)]
+    #[case::scan("detector", |u: &mut BeamlineConfigurationUpdate| u.detector = None)]
+    #[tokio::test]
+    async fn enew_beamline_with_missing_field(
+        mut update: BeamlineConfigurationUpdate,
+        #[case] name: &str,
+        #[case] init: impl FnOnce(&mut BeamlineConfigurationUpdate),
+    ) {
+        let db = SqliteScanPathService::memory().await;
+        init(&mut update);
+        let field = err!(NewConfigurationError::MissingField, update.insert_new(&db));
+        assert_eq!(field, name);
+    }
+
+    #[rstest]
+    #[case::directory(|u: &mut BeamlineConfigurationUpdate| u.extension = None)]
+    #[case::scan_number(|u: &mut BeamlineConfigurationUpdate| u.scan_number = None)]
+    #[tokio::test]
+    async fn new_beamline_without_optional(
+        mut update: BeamlineConfigurationUpdate,
+        #[case] init: impl FnOnce(&mut BeamlineConfigurationUpdate),
+    ) {
+        let db = SqliteScanPathService::memory().await;
+        init(&mut update);
+        let bc = ok!(update.insert_new(&db));
+        assert_eq!(bc.name(), "i22");
     }
 
     #[rstest]
     #[test]
-    async fn empty_db_has_no_config(#[future(awt)] db: SqliteScanPathService) {
-        let e = err!(db.current_configuration("i22"));
-        let ConfigurationError::MissingBeamline("i22") = e else {
-            panic!("Unexpected error from missing beamline: {e}");
+    async fn extension_requires_directory(mut update: BeamlineConfigurationUpdate) {
+        let db = SqliteScanPathService::memory().await;
+        update.directory = None;
+        let e = err!(NewConfigurationError::Db, update.insert_new(&db));
+        let e = *e.into_database_error().unwrap().downcast::<SqliteError>();
+        assert_eq!(e.kind(), ErrorKind::CheckViolation)
+    }
+
+    #[rstest]
+    #[test]
+    async fn read_only_db_propagates_errors(update: BeamlineConfigurationUpdate) {
+        let db = SqliteScanPathService::ro_memory().await;
+        let e = err!(NewConfigurationError::Db, update.insert_new(&db));
+        let e = e.into_database_error().unwrap().downcast::<SqliteError>();
+        assert_eq!(e.kind(), ErrorKind::Other);
+    }
+
+    #[rstest]
+    #[test]
+    async fn read_only_db_propagates_error(update: BeamlineConfigurationUpdate) {
+        let db = SqliteScanPathService::ro_memory().await;
+        let e = err!(NewConfigurationError::Db, update.insert_new(&db));
+        let e = e.into_database_error().unwrap().downcast::<SqliteError>();
+        assert_eq!(e.kind(), ErrorKind::Other);
+    }
+
+    #[test]
+    async fn duplicate_beamlines() {
+        let db = SqliteScanPathService::memory().await;
+        _ = ok!(update().insert_new(&db));
+        let e = err!(NewConfigurationError::Db, update().insert_new(&db));
+        let e = e.into_database_error().unwrap().downcast::<SqliteError>();
+        assert_eq!(e.kind(), ErrorKind::UniqueViolation);
+    }
+
+    #[rstest]
+    #[test]
+    async fn incrementing_scan_numbers(#[future(awt)] db: SqliteScanPathService) {
+        let s1 = ok!(db.next_scan_configuration("i22", None));
+        let s2 = ok!(db.next_scan_configuration("i22", None));
+        assert_eq!(s1.scan_number() + 1, s2.scan_number());
+    }
+
+    #[rstest]
+    #[test]
+    async fn overriding_scan_number_updates_db(#[future(awt)] db: SqliteScanPathService) {
+        let s1 = ok!(db.next_scan_configuration("i22", None));
+        let s2 = ok!(db.next_scan_configuration("i22", Some(1234)));
+        let s3 = ok!(db.next_scan_configuration("i22", None));
+        assert_eq!(s1.scan_number(), 123);
+        assert_eq!(s2.scan_number(), 1235);
+        assert_eq!(s3.scan_number(), 1236);
+    }
+
+    #[rstest]
+    #[test]
+    async fn lower_scan_override_is_ignored(#[future(awt)] db: SqliteScanPathService) {
+        let s1 = ok!(db.next_scan_configuration("i22", Some(42)));
+        assert_eq!(s1.scan_number(), 123);
+    }
+
+    #[rstest]
+    #[test]
+    async fn incrementing_missing_beamline(#[future(awt)] db: SqliteScanPathService) {
+        let e = err!(
+            ConfigurationError::MissingBeamline,
+            db.next_scan_configuration("b21", None)
+        );
+        assert_eq!(e, "b21")
+    }
+
+    #[rstest]
+    #[test]
+    async fn current_configuration(#[future(awt)] db: SqliteScanPathService) {
+        let conf = ok!(db.current_configuration("i22"));
+        assert_eq!(conf.name(), "i22");
+        assert_eq!(conf.scan_number(), 122);
+        assert_eq!(
+            conf.visit().unwrap().to_string(),
+            "/tmp/{instrument}/data/{year}/{visit}"
+        );
+        assert_eq!(
+            conf.scan().unwrap().to_string(),
+            "{subdirectory}/{instrument}-{scan_number}"
+        );
+        assert_eq!(
+            conf.detector().unwrap().to_string(),
+            "{subdirectory}/{instrument}-{scan_number}-{detector}"
+        );
+        let Some(fb) = conf.fallback() else {
+            panic!("Missing fallback configuration");
         };
+        assert_eq!(fb.directory, "/tmp/trackers");
+        assert_eq!(fb.extension, "ext");
+    }
+
+    type Update = BeamlineConfigurationUpdate;
+
+    #[rstest]
+    #[case::visit(
+            |u: &mut Update| u.visit = VisitTemplate::new_checked("/new/{instrument}/{proposal}/{visit}").ok(),
+            |u: BeamlineConfiguration| assert_eq!(u.visit().unwrap().to_string(), "/new/{instrument}/{proposal}/{visit}"))]
+    #[case::scan(
+            |u: &mut Update| u.scan = ScanTemplate::new_checked("new-{scan_number}").ok(),
+            |u: BeamlineConfiguration| assert_eq!(u.scan().unwrap().to_string(), "new-{scan_number}"))]
+    #[case::detector(
+            |u: &mut Update| u.detector = DetectorTemplate::new_checked("new-{scan_number}-{detector}").ok(),
+            |u: BeamlineConfiguration| assert_eq!(u.detector().unwrap().to_string(), "new-{scan_number}-{detector}"))]
+    #[case::scan_number(
+            |u: &mut Update| u.scan_number = Some(42),
+            |u: BeamlineConfiguration| assert_eq!(u.scan_number(), 42))]
+    #[case::directory(
+            |u: &mut Update| u.directory = Some("/new_trackers".into()),
+            |u: BeamlineConfiguration| assert_eq!(u.fallback().unwrap().directory, "/new_trackers"))]
+    #[case::extension(
+            |u: &mut Update| u.extension = Some("new".into()),
+            |u: BeamlineConfiguration| assert_eq!(u.fallback().unwrap().extension, "new"))]
+    #[tokio::test]
+    async fn update_existing(
+        #[future(awt)] db: SqliteScanPathService,
+        #[case] init: impl FnOnce(&mut Update),
+        #[case] check: impl FnOnce(BeamlineConfiguration),
+    ) {
+        let mut upd = Update::empty("i22");
+        init(&mut upd);
+        let bc = ok!(upd.update_beamline(&db)).expect("Updated beamline missing");
+        check(bc)
     }
 }

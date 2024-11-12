@@ -36,7 +36,7 @@ impl<Field> Part<Field> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Template<Field> {
     parts: Vec<Part<Field>>,
 }
@@ -53,7 +53,7 @@ impl<F: Display> Display for Template<F> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct PathTemplate<Field> {
     parts: Vec<Template<Field>>,
     kind: PathType,
@@ -146,7 +146,7 @@ impl Display for TemplateError {
 impl Error for TemplateError {}
 
 /// The reasons why a Template could be invalid
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ErrorKind {
     /// Template placeholders cannot contain other placeholders
     Nested,
@@ -184,6 +184,9 @@ impl TemplateError {
     }
     fn unknown(position: usize) -> Self {
         Self::new(position, ErrorKind::Unrecognised)
+    }
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
     }
 }
 
@@ -529,14 +532,30 @@ mod path_template_tests {
     }
 
     #[test]
+    fn current_directory_normalised() {
+        let path = from_template("./subdirectory", &NullSource);
+        assert_eq!(path, PathBuf::from("subdirectory"));
+
+        let path = from_template("./nested/./subdirectory", &NullSource);
+        assert_eq!(path, PathBuf::from("nested/subdirectory"));
+    }
+
+    #[test]
     fn invalid_path() {
-        fn assert_invalid(fmt: &'static str) {
-            assert_eq!(
-                PathTemplate::<String>::new(fmt).unwrap_err(),
-                PathTemplateError::InvalidPath
-            )
-        }
-        assert_invalid("../empty/{segment}");
-        assert_invalid("/../empty/{segment}");
+        assert_eq!(
+            PathTemplate::<String>::new("../parent/directory").unwrap_err(),
+            PathTemplateError::InvalidPath
+        )
+    }
+
+    #[rstest::rstest]
+    #[case::unclosed("unclosed/partial_{place/holder")]
+    #[case::empty("empty/{}/placeholder")]
+    #[case::nested("nested/{place{holder}}")]
+    fn invalid_path_template(#[case] template: &str) {
+        let e = PathTemplate::<String>::new(template).unwrap_err();
+        let PathTemplateError::TemplateError(_) = e else {
+            panic!("Unexpected error from path template: {e}");
+        };
     }
 }

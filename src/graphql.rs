@@ -16,7 +16,6 @@ use std::any;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
-use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -349,7 +348,7 @@ impl ConfigurationUpdates {
 }
 
 #[derive(Debug)]
-struct InputTemplate<S: PathSpec>(PathTemplate<S::Field>, PhantomData<S>);
+struct InputTemplate<S: PathSpec>(PathTemplate<S::Field>);
 
 impl<S, F> InputType for InputTemplate<S>
 where
@@ -360,7 +359,7 @@ where
     fn parse(value: Option<Value>) -> InputValueResult<Self> {
         match value.unwrap() {
             Value::String(txt) => match S::new_checked(&txt) {
-                Ok(pt) => Ok(Self(pt, Default::default())),
+                Ok(pt) => Ok(Self(pt)),
                 Err(e) => Err(InputValueError::custom(e)),
             },
             other => Err(InputValueError::expected_type(other)),
@@ -430,7 +429,7 @@ impl ScalarType for Subdirectory {
                 return Err(InputValueError::custom(err));
             }
             // path was created from string so shouldn't actually be lossy conversion
-            Ok(Self(path.to_string_lossy().to_string()))
+            Ok(Self(new_sub.to_string_lossy().to_string()))
         } else {
             Err(InputValueError::expected_type(value))
         }
@@ -492,5 +491,102 @@ impl Detector {
     }
     fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+#[cfg(test)]
+mod subdirectory_tests {
+    use async_graphql::{InputType as _, InputValueResult, Number, Value};
+
+    use super::Subdirectory;
+    fn parse_str(sub: &str) -> InputValueResult<Subdirectory> {
+        Subdirectory::parse(Some(Value::String(sub.into())))
+    }
+
+    #[test]
+    fn valid_subdirectory() {
+        parse_str("valid/subdirectory").unwrap();
+    }
+
+    #[test]
+    fn invalid_subdirectory() {
+        parse_str("../parent").unwrap_err();
+        parse_str("/absolute/path").unwrap_err();
+        Subdirectory::parse(Some(Value::Number(Number::from_f64(42f64).unwrap()))).unwrap_err();
+    }
+
+    #[test]
+    fn back_to_value() {
+        let sub = parse_str("./subdirectory").unwrap();
+        assert_eq!(sub.to_value(), Value::String("subdirectory".into()))
+    }
+}
+
+#[cfg(test)]
+mod detector_tests {
+    use async_graphql::{InputType as _, Number, Value};
+
+    use super::Detector;
+
+    #[rstest::rstest]
+    #[case::unchanged("camera", "camera")]
+    #[case::punctuation("foo+bar", "foo_bar")]
+    #[case::multiple_punctuation("foo+-?!bar", "foo_bar")]
+    fn normalised_name(#[case] input: &str, #[case] output: &str) {
+        let det = Detector::parse(Some(Value::String(input.into()))).unwrap();
+        let value = det.to_value();
+        let Value::String(s) = value else {
+            panic!("Unexpected value from detector: {value}");
+        };
+        assert_eq!(s, output);
+        assert_eq!(det.as_str(), output);
+        assert_eq!(det.into_string(), output);
+    }
+
+    #[test]
+    fn invalid_value() {
+        Detector::parse(Number::from_f64(3.14).map(Value::Number)).unwrap_err();
+    }
+}
+
+#[cfg(test)]
+mod input_template_tests {
+    use async_graphql::{InputType as _, Value};
+
+    use super::InputTemplate;
+    use crate::paths::{DetectorTemplate, ScanTemplate, VisitTemplate};
+
+    #[test]
+    fn valid_visit_template() {
+        InputTemplate::<VisitTemplate>::parse(Some(Value::String(
+            "/tmp/{instrument}/data/{visit}".into(),
+        )))
+        .unwrap();
+    }
+
+    #[rstest::rstest]
+    #[case::relative("tmp/{instrument}/{visit}")]
+    #[case::missing_instrument("/tmp/{visit}")]
+    #[case::missing_visit("/tmp/{instrument}/data")]
+    #[case::invalid_template("/tmp/{nested{placeholder}}")]
+    fn invalid_visit_template(#[case] path: String) {
+        InputTemplate::<VisitTemplate>::parse(Some(Value::String(path))).unwrap_err();
+    }
+
+    #[rstest::rstest]
+    #[case::absolute("/tmp/{instrument}")]
+    #[case::missing_scan_number("scan_file")]
+    #[case::invalid_template("tmp/{nested{placeholder}}")]
+    fn invalid_scan(#[case] path: String) {
+        InputTemplate::<ScanTemplate>::parse(Some(Value::String(path))).unwrap_err();
+    }
+
+    #[rstest::rstest]
+    #[case::relative("tmp/{instrument}/{visit}")]
+    #[case::missing_scan_number("{detector}")]
+    #[case::missing_detector("{scan_number}")]
+    #[case::invalid_template("tmp/{nested{placeholder}}")]
+    fn invalid_detector_template(#[case] path: String) {
+        InputTemplate::<DetectorTemplate>::parse(Some(Value::String(path))).unwrap_err();
     }
 }

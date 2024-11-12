@@ -143,7 +143,7 @@ pub trait PathSpec {
     fn describe() -> &'static str;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InvalidPathTemplate {
     TemplateError(PathTemplateError),
     ShouldBeAbsolute,
@@ -226,5 +226,87 @@ impl PathSpec for DetectorTemplate {
             "to ensure paths are unique between scans and for multiple ",
             "detectors."
         )
+    }
+}
+
+#[cfg(test)]
+mod paths_tests {
+    use std::fmt::Debug;
+
+    use super::{
+        DetectorTemplate, InvalidPathTemplate, PathSpec as _, ScanTemplate, VisitTemplate,
+    };
+    use crate::template::{ErrorKind, PathTemplateError};
+
+    #[derive(Debug)]
+    enum TemplateErrorType {
+        Incomplete,
+        Nested,
+        Empty,
+        Unrecognised,
+    }
+
+    impl PartialEq<InvalidPathTemplate> for TemplateErrorType {
+        fn eq(&self, other: &InvalidPathTemplate) -> bool {
+            match other {
+                InvalidPathTemplate::TemplateError(PathTemplateError::TemplateError(e)) => {
+                    match (self, e.kind()) {
+                        (Self::Incomplete, ErrorKind::Incomplete) => true,
+                        (Self::Nested, ErrorKind::Nested) => true,
+                        (Self::Unrecognised, ErrorKind::Unrecognised) => true,
+                        (Self::Empty, ErrorKind::Empty) => true,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::relative("relative/visit/path", InvalidPathTemplate::ShouldBeAbsolute)]
+    #[case::missing_visit("/{instrument}/data", InvalidPathTemplate::MissingField("visit".into()))]
+    #[case::missing_instrument("/data/{visit}", InvalidPathTemplate::MissingField("instrument".into()))]
+    #[case::invalid_path_incomplete("/data/{unclosed", TemplateErrorType::Incomplete)]
+    #[case::invalid_path_empty("/data/{}", TemplateErrorType::Empty)]
+    #[case::invalid_path_nested("/data/{nes{ted}}", TemplateErrorType::Nested)]
+    #[case::invalid_path_unrecognised("/data/{scan_number}", TemplateErrorType::Unrecognised)]
+    fn invalid_visit<E: PartialEq<InvalidPathTemplate> + Debug>(
+        #[case] template: &str,
+        #[case] err: E,
+    ) {
+        let e = VisitTemplate::new_checked(template).unwrap_err();
+        assert_eq!(err, e);
+    }
+
+    #[rstest::rstest]
+    #[case::absolute("/absolute/scan/path", InvalidPathTemplate::ShouldBeRelative)]
+    #[case::missing_scan_number("no_scan_number", InvalidPathTemplate::MissingField("scan_number".into()))]
+    #[case::invalid_path_incomplete("data/{unclosed", TemplateErrorType::Incomplete)]
+    #[case::invalid_path_empty("data/{}", TemplateErrorType::Empty)]
+    #[case::invalid_path_nested("data/{nes{ted}}", TemplateErrorType::Nested)]
+    #[case::invalid_path_unrecognised("data/{detector}", TemplateErrorType::Unrecognised)]
+    fn invalid_scan<E: PartialEq<InvalidPathTemplate> + Debug>(
+        #[case] template: &str,
+        #[case] err: E,
+    ) {
+        let e = ScanTemplate::new_checked(template).unwrap_err();
+        assert_eq!(err, e);
+    }
+
+    #[rstest::rstest]
+    #[case::absolute("/absolute/detector/path", InvalidPathTemplate::ShouldBeRelative)]
+    #[case::missing_detector("{scan_number}", InvalidPathTemplate::MissingField("detector".into()))]
+    #[case::missing_scan_number("{detector}", InvalidPathTemplate::MissingField("scan_number".into()))]
+    #[case::invalid_path_incomplete("data/{unclosed", TemplateErrorType::Incomplete)]
+    #[case::invalid_path_empty("data/{}", TemplateErrorType::Empty)]
+    #[case::invalid_path_nested("data/{nes{ted}}", TemplateErrorType::Nested)]
+    #[case::invalid_path_unrecognised("data/{unknown}", TemplateErrorType::Unrecognised)]
+    fn invalid_detector<E: PartialEq<InvalidPathTemplate> + Debug>(
+        #[case] template: &str,
+        #[case] err: E,
+    ) {
+        let e = DetectorTemplate::new_checked(template).unwrap_err();
+        assert_eq!(err, e);
     }
 }

@@ -14,9 +14,7 @@ axum = "0.7.5"
 chrono = "0.4.38"
 clap = { version = "4.5.16", features = ["cargo", "derive"] }
 clap-verbosity-flag = "2.2.1"
-fd-lock = "4.0.2"
 futures = "0.3.30"
-inquire = { version = "0.7.5", default-features = false, features = ["termion"] }
 opentelemetry = "0.24.0"
 opentelemetry-otlp = "0.17.0"
 opentelemetry-semantic-conventions = "0.16.0"

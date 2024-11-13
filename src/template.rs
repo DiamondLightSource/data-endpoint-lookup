@@ -185,6 +185,7 @@ impl TemplateError {
     fn unknown(position: usize) -> Self {
         Self::new(position, ErrorKind::Unrecognised)
     }
+    #[cfg(test)]
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }

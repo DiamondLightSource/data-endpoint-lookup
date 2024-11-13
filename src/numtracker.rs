@@ -28,13 +28,13 @@ impl<'e> GdaNumTracker<'e> {
     /// Create a new num tracker for the given directory and extension
     pub fn new<P: AsRef<Path>>(directory: &'e P, ext: &'e str) -> Result<Self, Error> {
         let directory = directory.as_ref();
-        if !ext.chars().all(|c| c.is_alphanumeric()) {
+        if ext.chars().all(char::is_alphanumeric) {
+            Ok(Self { ext, directory })
+        } else {
             Err(Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("{ext:?} is not a valid extension"),
             ))
-        } else {
-            Ok(Self { directory, ext })
         }
     }
 

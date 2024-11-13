@@ -56,7 +56,7 @@ async fn list_bl_info(conf: BeamlineConfiguration) {
         extension,
     }) = conf.fallback()
     {
-        match GdaNumTracker::new(&directory, &extension) {
+        match GdaNumTracker::new(&directory, extension) {
             Ok(nt) => match nt.latest_scan_number().await {
                 Ok(latest) => println!("    Numtracker file: {directory}/{latest}.{extension}"),
                 Err(e) => println!("    Numtracker file unavailable: {e}"),

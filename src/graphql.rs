@@ -112,7 +112,7 @@ struct ScanPaths {
 #[derive(Debug)]
 struct NonUnicodePath;
 
-/// Try and convert a path to a string (via OsString), returning a NonUnicodePath
+/// Try and convert a path to a string (via `OsString`), returning a `NonUnicodePath`
 /// error if not possible
 fn path_to_string(path: PathBuf) -> Result<String, NonUnicodePath> {
     path.into_os_string()
@@ -306,7 +306,7 @@ impl Mutation {
             None => Ok(db.current_configuration(&beamline).await?),
             Some(cfg) => {
                 let upd = cfg.into_update(beamline);
-                match upd.update_beamline(&db).await? {
+                match upd.update_beamline(db).await? {
                     Some(bc) => Ok(bc),
                     None => Ok(upd.insert_new(db).await?),
                 }
@@ -357,12 +357,13 @@ where
 {
     type RawValueType = PathTemplate<F>;
     fn parse(value: Option<Value>) -> InputValueResult<Self> {
-        match value.unwrap() {
-            Value::String(txt) => match S::new_checked(&txt) {
+        match value {
+            Some(Value::String(txt)) => match S::new_checked(&txt) {
                 Ok(pt) => Ok(Self(pt)),
                 Err(e) => Err(InputValueError::custom(e)),
             },
-            other => Err(InputValueError::expected_type(other)),
+            Some(other) => Err(InputValueError::expected_type(other)),
+            None => Err(InputValueError::expected_type(Value::Null)),
         }
     }
     fn to_value(&self) -> Value {
@@ -382,10 +383,7 @@ where
         registry.create_input_type::<Self, _>(MetaTypeId::Scalar, |_| MetaType::Scalar {
             name: Self::type_name().into(),
             description: Some(S::describe().into()),
-            is_valid: Some(Arc::new(|v| match v {
-                Value::String(_) => true,
-                _ => false,
-            })),
+            is_valid: Some(Arc::new(|v| matches!(v, Value::String(_)))),
             visible: None,
             inaccessible: false,
             tags: vec![],
@@ -545,7 +543,8 @@ mod detector_tests {
 
     #[test]
     fn invalid_value() {
-        Detector::parse(Number::from_f64(3.14).map(Value::Number)).unwrap_err();
+        Detector::parse(Number::from_f64(42f64).map(Value::Number)).unwrap_err();
+        Detector::parse(None).unwrap_err();
     }
 }
 

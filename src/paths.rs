@@ -250,13 +250,13 @@ mod paths_tests {
         fn eq(&self, other: &InvalidPathTemplate) -> bool {
             match other {
                 InvalidPathTemplate::TemplateError(PathTemplateError::TemplateError(e)) => {
-                    match (self, e.kind()) {
-                        (Self::Incomplete, ErrorKind::Incomplete) => true,
-                        (Self::Nested, ErrorKind::Nested) => true,
-                        (Self::Unrecognised, ErrorKind::Unrecognised) => true,
-                        (Self::Empty, ErrorKind::Empty) => true,
-                        _ => false,
-                    }
+                    matches!(
+                        (self, e.kind()),
+                        (Self::Incomplete, ErrorKind::Incomplete)
+                            | (Self::Nested, ErrorKind::Nested)
+                            | (Self::Unrecognised, ErrorKind::Unrecognised)
+                            | (Self::Empty, ErrorKind::Empty)
+                    )
                 }
                 _ => false,
             }

@@ -49,13 +49,13 @@ where
     Spec: PathSpec,
 {
     fn as_template(&self) -> SqliteTemplateResult<Spec::Field> {
-        Ok(Spec::new_checked(&self.0)?)
+        Spec::new_checked(&self.0)
     }
 }
 
 impl<F> From<String> for RawPathTemplate<F> {
     fn from(value: String) -> Self {
-        Self(value, PhantomData::default())
+        Self(value, PhantomData)
     }
 }
 
@@ -101,9 +101,9 @@ impl<'r> FromRow<'r, SqliteRow> for BeamlineConfiguration {
             id: None,
             name: row.try_get("name")?,
             scan_number: row.try_get("scan_number")?,
-            visit: row.try_get::<String, _>("visit")?.into(),
-            scan: row.try_get::<String, _>("scan")?.into(),
-            detector: row.try_get::<String, _>("detector")?.into(),
+            visit: row.try_get::<String, _>("visit")?,
+            scan: row.try_get::<String, _>("scan")?,
+            detector: row.try_get::<String, _>("detector")?,
             fallback_extension: row.try_get::<Option<String>, _>("fallback_extension")?,
             fallback_directory: row.try_get::<Option<String>, _>("fallback_directory")?,
         }
@@ -176,7 +176,7 @@ impl BeamlineConfigurationUpdate {
         let dbc = DbBeamlineConfig {
             id: None,
             name: self.name,
-            scan_number: self.scan_number.unwrap_or(0) as i64,
+            scan_number: i64::from(self.scan_number.unwrap_or(0)),
             visit: self.visit.ok_or("visit")?.to_string(),
             scan: self.scan.ok_or("scan")?.to_string(),
             detector: self.detector.ok_or("detector")?.to_string(),
@@ -241,8 +241,7 @@ impl DbBeamlineConfig {
 impl From<DbBeamlineConfig> for BeamlineConfiguration {
     fn from(value: DbBeamlineConfig) -> Self {
         let fallback = match (value.fallback_directory, value.fallback_extension) {
-            (None, None) => None,
-            (None, Some(_)) => None,
+            (None, _) => None,
             (Some(dir), None) => Some(NumtrackerConfig {
                 directory: dir,
                 extension: value.name.clone(),
@@ -254,7 +253,7 @@ impl From<DbBeamlineConfig> for BeamlineConfiguration {
         };
         Self {
             name: value.name,
-            scan_number: value.scan_number as u32,
+            scan_number: u32::try_from(value.scan_number).expect("Run out of scan numbers"),
             visit: value.visit.into(),
             scan: value.scan.into(),
             detector: value.detector.into(),

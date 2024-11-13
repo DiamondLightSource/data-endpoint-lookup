@@ -82,7 +82,7 @@ enum PathType {
     Relative,
 }
 impl PathType {
-    fn init(&self) -> PathBuf {
+    fn init(self) -> PathBuf {
         match self {
             PathType::Absolute => PathBuf::from("/"),
             PathType::Relative => PathBuf::new(),
@@ -310,7 +310,7 @@ impl<F> PathTemplate<F> {
     /// Iterate through all the fields in this path. Fields may be duplicated if they are
     /// referenced multiple times in the path.
     pub fn referenced_fields(&self) -> impl Iterator<Item = &F> {
-        self.parts.iter().flat_map(|t| t.referenced_fields())
+        self.parts.iter().flat_map(Template::referenced_fields)
     }
 }
 

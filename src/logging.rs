@@ -78,7 +78,7 @@ where
     }
 }
 
-pub fn init_logging(logging: Option<Level>, tracing: &TracingOptions) -> Result<(), TraceError> {
+pub fn init(logging: Option<Level>, tracing: &TracingOptions) -> Result<(), TraceError> {
     let log_layer = init_stdout(logging);
     let trace_layer = init_tracing(tracing.tracing_url(), tracing.level())?;
 

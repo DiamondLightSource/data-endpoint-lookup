@@ -46,8 +46,6 @@ pub struct TracingOptions {
 pub enum Command {
     /// Run the server to respond to visit and scan path requests
     Serve(ServeOptions),
-    /// List the current configuration
-    Info(InfoOptions),
     /// Generate the graphql schema
     Schema,
 }
@@ -60,13 +58,6 @@ pub struct ServeOptions {
     /// The port to open for requests
     #[clap(short, long, default_value_t = 8000)]
     port: u16,
-}
-
-#[derive(Debug, Parser)]
-pub struct InfoOptions {
-    /// Limit the info to just one beamline
-    #[clap(short, long)]
-    beamline: Option<String>,
 }
 
 impl Cli {
@@ -91,12 +82,6 @@ impl Cli {
 impl ServeOptions {
     pub(crate) fn addr(&self) -> (Ipv4Addr, u16) {
         (self.host, self.port)
-    }
-}
-
-impl InfoOptions {
-    pub fn beamline(&self) -> Option<&str> {
-        self.beamline.as_deref()
     }
 }
 

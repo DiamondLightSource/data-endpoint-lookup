@@ -251,6 +251,17 @@ impl Query {
         let info = db.current_configuration(&beamline).await?;
         Ok(VisitPath { visit, info })
     }
+
+    #[instrument(skip(self, ctx))]
+    async fn configuration(
+        &self,
+        ctx: &Context<'_>,
+        beamline: String,
+    ) -> async_graphql::Result<BeamlineConfiguration> {
+        let db = ctx.data::<SqliteScanPathService>()?;
+        trace!("Getting config for {beamline:?}");
+        Ok(db.current_configuration(&beamline).await?)
+    }
 }
 
 #[Object]
@@ -298,19 +309,14 @@ impl Mutation {
         &self,
         ctx: &Context<'ctx>,
         beamline: String,
-        config: Option<ConfigurationUpdates>,
+        config: ConfigurationUpdates,
     ) -> async_graphql::Result<BeamlineConfiguration> {
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Configuring: {beamline}: {config:?}");
-        match config.filter(|c| !c.is_empty()) {
-            None => Ok(db.current_configuration(&beamline).await?),
-            Some(cfg) => {
-                let upd = cfg.into_update(beamline);
-                match upd.update_beamline(db).await? {
-                    Some(bc) => Ok(bc),
-                    None => Ok(upd.insert_new(db).await?),
-                }
-            }
+        let upd = config.into_update(beamline);
+        match upd.update_beamline(db).await? {
+            Some(bc) => Ok(bc),
+            None => Ok(upd.insert_new(db).await?),
         }
     }
 }
@@ -326,14 +332,6 @@ struct ConfigurationUpdates {
 }
 
 impl ConfigurationUpdates {
-    fn is_empty(&self) -> bool {
-        self.scan_number.is_none()
-            && self.visit.is_none()
-            && self.scan.is_none()
-            && self.detector.is_none()
-            && self.directory.is_none()
-            && self.extension.is_none()
-    }
     fn into_update(self, name: String) -> BeamlineConfigurationUpdate {
         BeamlineConfigurationUpdate {
             name,

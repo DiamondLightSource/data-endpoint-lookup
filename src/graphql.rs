@@ -56,18 +56,19 @@ pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
         .await
         .expect("Unable to open DB");
     info!("Serving graphql endpoints on {:?}", opts.addr());
+    let addr = opts.addr();
     let schema = Schema::build(Query, Mutation, EmptySubscription)
         .extension(Tracing)
         .data(db)
-        .data(opts.policy().map(PolicyCheck::new))
+        .data(opts.policy.map(PolicyCheck::new))
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/graphiql", get(graphiql))
         .layer(Extension(schema));
-    let listener = TcpListener::bind(opts.addr())
+    let listener = TcpListener::bind(addr)
         .await
-        .unwrap_or_else(|_| panic!("Port {:?} in use", opts.addr()));
+        .unwrap_or_else(|_| panic!("Port {:?} in use", addr));
     axum::serve(listener, app)
         .await
         .expect("Can't serve graphql endpoint");
@@ -269,6 +270,10 @@ impl Query {
         ctx: &Context<'_>,
         beamline: String,
     ) -> async_graphql::Result<BeamlineConfiguration> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            let token = ctx.data::<Authorization<Bearer>>().ok();
+            policy.check_admin(token, &beamline).await?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Getting config for {beamline:?}");
         Ok(db.current_configuration(&beamline).await?)
@@ -288,7 +293,7 @@ impl Mutation {
     ) -> async_graphql::Result<ScanPaths> {
         if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
             let token = ctx.data::<Authorization<Bearer>>().ok();
-            policy.check(token, &beamline, &visit).await?;
+            policy.check_access(token, &beamline, &visit).await?;
         }
         let db = ctx.data::<SqliteScanPathService>()?;
         // There is a race condition here if a process increments the file
@@ -326,6 +331,10 @@ impl Mutation {
         beamline: String,
         config: ConfigurationUpdates,
     ) -> async_graphql::Result<BeamlineConfiguration> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            let token = ctx.data::<Authorization<Bearer>>().ok();
+            policy.check_admin(token, &beamline).await?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Configuring: {beamline}: {config:?}");
         let upd = config.into_update(beamline);

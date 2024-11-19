@@ -1,39 +1,139 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
+use access::Request as AccessReq;
+use admin::Request as AdminReq;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use crate::cli::PolicyOptions;
 
 const AUDIENCE: &str = "account";
 
-#[derive(Debug, Serialize)]
-struct Input<'a> {
-    input: Request<'a>,
-}
+type Token = Authorization<Bearer>;
 
 #[derive(Debug, Serialize)]
-struct Request<'a> {
-    token: &'a str,
-    audience: &'a str,
-    proposal: u32,
-    visit: u16,
+struct Query<'q, I> {
+    query: &'q str,
+    input: I,
 }
 
 #[derive(Debug, Deserialize)]
-struct Response {
-    result: Decision,
+struct Response<R> {
+    result: R,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Decision {
-    access: bool,
-    beamline: String,
+trait Input: Serialize {
+    type Response: Auth;
+}
+trait Auth: DeserializeOwned {
+    fn check(self) -> Result<(), AuthError>;
+}
+
+mod access {
+    use serde::{Deserialize, Serialize};
+
+    use super::{Auth, AuthError, Input, Token, Visit, AUDIENCE};
+
+    #[derive(Debug, Serialize)]
+    pub struct Request<'a> {
+        token: &'a str,
+        audience: &'a str,
+        proposal: u32,
+        visit: u16,
+        beamline: &'a str,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct Decision {
+        access: bool,
+        beamline_matches: bool,
+    }
+
+    impl<'a> Request<'a> {
+        pub fn new(
+            token: Option<&'a Token>,
+            visit: Visit,
+            beamline: &'a str,
+        ) -> Result<Self, AuthError> {
+            Ok(Self {
+                token: token.ok_or(AuthError::Missing)?.token(),
+                audience: AUDIENCE,
+                proposal: visit.proposal,
+                visit: visit.session,
+                beamline,
+            })
+        }
+    }
+
+    impl Input for Request<'_> {
+        type Response = Decision;
+    }
+
+    impl Auth for Decision {
+        fn check(self) -> Result<(), super::AuthError> {
+            if !self.access {
+                Err(AuthError::Failed)
+            } else if !self.beamline_matches {
+                Err(AuthError::BeamlineMismatch)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+mod admin {
+    use serde::{Deserialize, Serialize};
+
+    use super::{Auth, AuthError, Input, Token, AUDIENCE};
+
+    #[derive(Debug, Serialize)]
+    pub struct Request<'a> {
+        token: &'a str,
+        audience: &'a str,
+        beamline: &'a str,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct Decision {
+        beamline_admin: bool,
+        admin: bool,
+    }
+
+    impl Input for Request<'_> {
+        type Response = Decision;
+    }
+
+    impl<'r> Request<'r> {
+        pub(crate) fn new(token: Option<&'r Token>, beamline: &'r str) -> Result<Self, AuthError> {
+            Ok(Self {
+                token: token.ok_or(AuthError::Missing)?.token(),
+                audience: AUDIENCE,
+                beamline,
+            })
+        }
+    }
+
+    impl Auth for Decision {
+        fn check(self) -> Result<(), AuthError> {
+            if self.beamline_admin || self.admin {
+                Ok(())
+            } else {
+                Err(AuthError::Failed)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct InvalidVisit;
-struct Visit(String, u32, u16);
+struct Visit {
+    proposal: u32,
+    session: u16,
+}
 impl FromStr for Visit {
     type Err = InvalidVisit;
 
@@ -43,54 +143,63 @@ impl FromStr for Visit {
             .chars()
             .skip_while(|p| !p.is_ascii_digit())
             .collect::<String>();
-        let prop = prop.parse().map_err(|_| InvalidVisit)?;
-        let vis = vis.parse().map_err(|_| InvalidVisit)?;
-        let code = code_prop
-            .chars()
-            .take_while(|p| !p.is_ascii_digit())
-            .collect();
-        Ok(Self(code, prop, vis))
+        let proposal = prop.parse().map_err(|_| InvalidVisit)?;
+        let session = vis.parse().map_err(|_| InvalidVisit)?;
+        Ok(Self { proposal, session })
     }
 }
 
-pub(crate) struct PolicyCheck(reqwest::Client, String);
+pub(crate) struct PolicyCheck {
+    client: reqwest::Client,
+    /// OPA instance
+    host: String,
+    /// Rego query for getting admin rights
+    admin: String,
+    /// Rego query for getting access rights
+    access: String,
+}
 
 impl PolicyCheck {
-    pub fn new<S: Into<String>>(endpoint: S) -> Self {
-        Self(reqwest::Client::new(), endpoint.into())
+    pub fn new(endpoint: PolicyOptions) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            host: endpoint.host + "/v1/query",
+            admin: endpoint.admin_query,
+            access: endpoint.visit_query,
+        }
     }
-    pub async fn check(
+    pub async fn check_access(
         &self,
         token: Option<&Authorization<Bearer>>,
         beamline: &str,
         visit: &str,
     ) -> Result<(), AuthError> {
-        let token = token.ok_or(AuthError::Missing)?;
         let visit: Visit = visit.parse().map_err(|_| AuthError::Failed)?;
-        let query = Input {
-            input: Request {
-                token: token.token(),
-                audience: AUDIENCE,
-                proposal: visit.1,
-                visit: visit.2,
-            },
-        };
-        let response = self.0.post(&self.1).json(&query).send().await?;
-        let response = response
-            .json::<Response>()
+        self.authorise(&self.access, AccessReq::new(token, visit, beamline)?)
             .await
-            .map_err(|_| AuthError::Failed)?
-            .result;
-        if !response.access {
-            Err(AuthError::Failed)
-        } else if response.beamline != beamline {
-            Err(AuthError::BeamlineMismatch {
-                actual: response.beamline,
-                expected: beamline.to_string(),
-            })
-        } else {
-            Ok(())
-        }
+    }
+
+    pub async fn check_admin(
+        &self,
+        token: Option<&Authorization<Bearer>>,
+        beamline: &str,
+    ) -> Result<(), AuthError> {
+        self.authorise(&self.admin, AdminReq::new(token, beamline)?)
+            .await
+    }
+
+    async fn authorise<'q, I: Input>(&self, query: &'q str, input: I) -> Result<(), AuthError> {
+        let response = self
+            .client
+            .post(&self.host)
+            .json(&Query { query, input })
+            .send()
+            .await?;
+        response
+            .json::<Response<I::Response>>()
+            .await?
+            .result
+            .check()
     }
 }
 
@@ -98,7 +207,7 @@ impl PolicyCheck {
 pub enum AuthError {
     ServerError(reqwest::Error),
     Failed,
-    BeamlineMismatch { expected: String, actual: String },
+    BeamlineMismatch,
     Missing,
 }
 
@@ -107,10 +216,9 @@ impl Display for AuthError {
         match self {
             AuthError::ServerError(e) => e.fmt(f),
             AuthError::Failed => write!(f, "Authentication failed"),
-            AuthError::BeamlineMismatch { expected, actual } => write!(
-                f,
-                "Invalid beamline. Expected: {expected}, actual: {actual}"
-            ),
+            AuthError::BeamlineMismatch => {
+                f.write_str("Invalid beamline. Visit is not on current beamline")
+            }
             AuthError::Missing => f.write_str("No authenication token was provided"),
         }
     }

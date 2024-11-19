@@ -61,7 +61,7 @@ pub struct ServeOptions {
     /// The root directory for external number tracking
     #[clap(long, env = "NUMTRACKER_ROOT_DIRECTORY")]
     root_directory: Option<PathBuf>,
-    #[clap(flatten)]
+    #[clap(flatten, next_help_heading = "Authorization")]
     pub policy: Option<PolicyOptions>,
 }
 
@@ -69,19 +69,18 @@ pub struct ServeOptions {
 pub struct PolicyOptions {
     /// Beamline Policy Endpoint
     ///
-    /// eg, authz.diamond.ac.uk
+    /// eg, https://authz.diamond.ac.uk
     #[clap(long = "policy")]
-    pub host: String,
-    /// The Rego query used to generate visit access data
+    pub policy_host: String,
+    /// The Rego rule used to generate visit access data
     ///
-    /// eg.
-    /// access:=data.diamond.policy.session.access;beamline_match:=data.diamond.policy.session.beamline_matches
-    #[clap(long, requires = "policy")]
+    /// eg. v1/data/diamond/policy/session/write_to_beamline_visit
+    #[clap(long)]
     pub visit_query: String,
-    /// The Rego query used to generate admin access data
+    /// The Rego rule used to generate admin access data
     ///
-    /// eg. admin:=data.diamond.policy.admin.admin;beamline:=data.diamond.policy.admin.beamline_admin
-    #[clap(long, requires = "policy")]
+    /// eg. v1/data/diamond/policy/admin/configure_beamline
+    #[clap(long)]
     pub admin_query: String,
 }
 

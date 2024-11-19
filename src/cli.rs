@@ -61,9 +61,28 @@ pub struct ServeOptions {
     /// The root directory for external number tracking
     #[clap(long, env = "NUMTRACKER_ROOT_DIRECTORY")]
     root_directory: Option<PathBuf>,
+    #[clap(flatten)]
+    pub policy: Option<PolicyOptions>,
+}
+
+#[derive(Debug, Default, Parser)]
+pub struct PolicyOptions {
     /// Beamline Policy Endpoint
-    #[clap(long)]
-    policy: Option<String>,
+    ///
+    /// eg, authz.diamond.ac.uk
+    #[clap(long = "policy")]
+    pub host: String,
+    /// The Rego query used to generate visit access data
+    ///
+    /// eg.
+    /// access:=data.diamond.policy.session.access;beamline_match:=data.diamond.policy.session.beamline_matches
+    #[clap(long, requires = "policy")]
+    pub visit_query: String,
+    /// The Rego query used to generate admin access data
+    ///
+    /// eg. admin:=data.diamond.policy.admin.admin;beamline:=data.diamond.policy.admin.beamline_admin
+    #[clap(long, requires = "policy")]
+    pub admin_query: String,
 }
 
 #[derive(Debug, Args)]
@@ -118,10 +137,6 @@ impl ServeOptions {
     }
     pub(crate) fn root_directory(&self) -> Option<PathBuf> {
         self.root_directory.clone()
-    }
-
-    pub(crate) fn policy(&self) -> Option<&str> {
-        self.policy.as_deref()
     }
 }
 

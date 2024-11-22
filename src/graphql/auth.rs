@@ -1,8 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use access::Request as AccessReq;
-use admin::Request as AdminReq;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use serde::{Deserialize, Serialize};
@@ -18,72 +16,42 @@ struct Response {
     result: bool,
 }
 
-mod access {
-    use serde::{Deserialize, Serialize};
-
-    use super::{AuthError, Token, Visit, AUDIENCE};
-
-    #[derive(Debug, Serialize)]
-    pub struct Request<'a> {
-        token: &'a str,
-        audience: &'a str,
-        proposal: u32,
-        visit: u16,
-        beamline: &'a str,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct Decision {
-        access: bool,
-        beamline_matches: bool,
-    }
-
-    impl<'a> Request<'a> {
-        pub fn new(
-            token: Option<&'a Token>,
-            visit: Visit,
-            beamline: &'a str,
-        ) -> Result<Self, AuthError> {
-            Ok(Self {
-                token: token.ok_or(AuthError::Missing)?.token(),
-                audience: AUDIENCE,
-                proposal: visit.proposal,
-                visit: visit.session,
-                beamline,
-            })
-        }
-    }
-
+#[derive(Debug, Serialize)]
+pub struct AccessRequest<'a> {
+    token: &'a str,
+    audience: &'a str,
+    proposal: u32,
+    visit: u16,
+    beamline: &'a str,
 }
 
-mod admin {
-    use serde::{Deserialize, Serialize};
-
-    use super::{AuthError, Token, AUDIENCE};
-
-    #[derive(Debug, Serialize)]
-    pub struct Request<'a> {
-        token: &'a str,
-        audience: &'a str,
-        beamline: &'a str,
+impl<'a> AccessRequest<'a> {
+    fn new(token: Option<&'a Token>, visit: Visit, beamline: &'a str) -> Result<Self, AuthError> {
+        Ok(Self {
+            token: token.ok_or(AuthError::Missing)?.token(),
+            audience: AUDIENCE,
+            proposal: visit.proposal,
+            visit: visit.session,
+            beamline,
+        })
     }
+}
 
-    #[derive(Debug, Serialize, Deserialize)]
-    pub struct Decision {
-        beamline_admin: bool,
-        admin: bool,
+#[derive(Debug, Serialize)]
+pub struct AdminRequest<'a> {
+    token: &'a str,
+    audience: &'a str,
+    beamline: &'a str,
+}
+
+impl<'r> AdminRequest<'r> {
+    fn new(token: Option<&'r Token>, beamline: &'r str) -> Result<Self, AuthError> {
+        Ok(Self {
+            token: token.ok_or(AuthError::Missing)?.token(),
+            audience: AUDIENCE,
+            beamline,
+        })
     }
-
-    impl<'r> Request<'r> {
-        pub(crate) fn new(token: Option<&'r Token>, beamline: &'r str) -> Result<Self, AuthError> {
-            Ok(Self {
-                token: token.ok_or(AuthError::Missing)?.token(),
-                audience: AUDIENCE,
-                beamline,
-            })
-        }
-    }
-
 }
 
 #[derive(Debug)]
@@ -130,7 +98,7 @@ impl PolicyCheck {
         visit: &str,
     ) -> Result<(), AuthError> {
         let visit: Visit = visit.parse().map_err(|_| AuthError::Failed)?;
-        self.authorise(&self.access, AccessReq::new(token, visit, beamline)?)
+        self.authorise(&self.access, AccessRequest::new(token, visit, beamline)?)
             .await
     }
 
@@ -139,7 +107,7 @@ impl PolicyCheck {
         token: Option<&Authorization<Bearer>>,
         beamline: &str,
     ) -> Result<(), AuthError> {
-        self.authorise(&self.admin, AdminReq::new(token, beamline)?)
+        self.authorise(&self.admin, AdminRequest::new(token, beamline)?)
             .await
     }
 

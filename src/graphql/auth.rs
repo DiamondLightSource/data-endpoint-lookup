@@ -111,7 +111,7 @@ impl PolicyCheck {
             .await
     }
 
-    async fn authorise<'q>(&self, query: &'q str, input: impl Serialize) -> Result<(), AuthError> {
+    async fn authorise(&self, query: &str, input: impl Serialize) -> Result<(), AuthError> {
         let response = self.client.post(query).json(&input).send().await?;
         if response.json::<Response>().await?.result {
             Ok(())

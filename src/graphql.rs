@@ -36,7 +36,7 @@ use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use chrono::{Datelike, Local};
 use tokio::net::TcpListener;
-use tracing::{info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::cli::ServeOptions;
 use crate::db_service::{
@@ -94,7 +94,7 @@ async fn graphql_handler(
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     schema
-        .execute(req.into_inner().data(auth_token))
+        .execute(req.into_inner().data(auth_token.map(|header| header.0)))
         .await
         .into()
 }
@@ -275,8 +275,12 @@ impl Query {
         beamline: String,
     ) -> async_graphql::Result<BeamlineConfiguration> {
         if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
-            let token = ctx.data::<Authorization<Bearer>>().ok();
-            policy.check_admin(token, &beamline).await?;
+            debug!("Auth enabled: checking token");
+            let token = ctx.data::<Option<Authorization<Bearer>>>()?;
+            policy
+                .check_admin(token.as_ref(), &beamline)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
         }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Getting config for {beamline:?}");
@@ -296,8 +300,12 @@ impl Mutation {
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
         if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
-            let token = ctx.data::<Authorization<Bearer>>().ok();
-            policy.check_access(token, &beamline, &visit).await?;
+            trace!("Auth enabled: checking token");
+            let token = ctx.data::<Option<Authorization<Bearer>>>()?;
+            policy
+                .check_access(token.as_ref(), &beamline, &visit)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
         }
         let db = ctx.data::<SqliteScanPathService>()?;
         let nt = ctx.data::<NumTracker>()?;
@@ -332,8 +340,12 @@ impl Mutation {
         config: ConfigurationUpdates,
     ) -> async_graphql::Result<BeamlineConfiguration> {
         if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            trace!("Auth enabled: checking token");
             let token = ctx.data::<Authorization<Bearer>>().ok();
-            policy.check_admin(token, &beamline).await?;
+            policy
+                .check_admin(token, &beamline)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
         }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Configuring: {beamline}: {config:?}");

@@ -4,6 +4,7 @@ use std::str::FromStr;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::cli::PolicyOptions;
 
@@ -85,6 +86,10 @@ pub(crate) struct PolicyCheck {
 
 impl PolicyCheck {
     pub fn new(endpoint: PolicyOptions) -> Self {
+        info!(
+            "Checking authorization against {:?} using {:?} for admin and {:?} for access",
+            endpoint.policy_host, endpoint.admin_query, endpoint.visit_query
+        );
         Self {
             client: reqwest::Client::new(),
             admin: format!("{}/{}", endpoint.policy_host, endpoint.admin_query),
@@ -131,9 +136,9 @@ pub enum AuthError {
 impl Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuthError::ServerError(e) => e.fmt(f),
+            AuthError::ServerError(_) => write!(f, "Invalid authorization configuration"),
             AuthError::Failed => write!(f, "Authentication failed"),
-            AuthError::Missing => f.write_str("No authenication token was provided"),
+            AuthError::Missing => f.write_str("No authentication token was provided"),
         }
     }
 }

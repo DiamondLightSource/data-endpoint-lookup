@@ -66,21 +66,22 @@ pub struct ServeOptions {
 }
 
 #[derive(Debug, Default, Parser)]
+#[group(requires = "policy_host")]
 pub struct PolicyOptions {
     /// Beamline Policy Endpoint
     ///
     /// eg, https://authz.diamond.ac.uk
-    #[clap(long = "policy")]
+    #[clap(long = "policy", required = false)]
     pub policy_host: String,
     /// The Rego rule used to generate visit access data
     ///
     /// eg. v1/data/diamond/policy/session/write_to_beamline_visit
-    #[clap(long)]
+    #[clap(long, required = false)]
     pub visit_query: String,
     /// The Rego rule used to generate admin access data
     ///
     /// eg. v1/data/diamond/policy/admin/configure_beamline
-    #[clap(long)]
+    #[clap(long, required = false)]
     pub admin_query: String,
 }
 

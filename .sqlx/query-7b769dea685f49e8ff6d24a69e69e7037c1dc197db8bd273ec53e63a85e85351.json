@@ -34,13 +34,8 @@
         "type_info": "Text"
       },
       {
-        "name": "fallback_directory",
-        "ordinal": 6,
-        "type_info": "Text"
-      },
-      {
         "name": "fallback_extension",
-        "ordinal": 7,
+        "ordinal": 6,
         "type_info": "Text"
       }
     ],
@@ -54,7 +49,6 @@
       false,
       false,
       false,
-      true,
       true
     ]
   },

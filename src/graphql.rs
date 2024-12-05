@@ -38,7 +38,7 @@ use crate::cli::ServeOptions;
 use crate::db_service::{
     BeamlineConfiguration, BeamlineConfigurationUpdate, SqliteScanPathService,
 };
-use crate::numtracker::GdaNumTracker;
+use crate::numtracker::NumTracker;
 use crate::paths::{
     BeamlineField, DetectorField, DetectorTemplate, PathSpec, ScanField, ScanTemplate,
     VisitTemplate,
@@ -49,11 +49,14 @@ pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db)
         .await
         .expect("Unable to open DB");
+    let directory_numtracker = NumTracker::for_root_directory(opts.root_directory())
+        .expect("Could not read external directories");
     info!("Serving graphql endpoints on {:?}", opts.addr());
     let schema = Schema::build(Query, Mutation, EmptySubscription)
         .extension(Tracing)
         .limit_directives(32)
         .data(db)
+        .data(directory_numtracker)
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
@@ -278,23 +281,19 @@ impl Mutation {
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
         let db = ctx.data::<SqliteScanPathService>()?;
+        let nt = ctx.data::<NumTracker>()?;
         // There is a race condition here if a process increments the file
         // while the DB is being queried or between the two queries but there
         // isn't much we can do from here.
         let current = db.current_configuration(&beamline).await?;
-        let fallback = current
-            .fallback()
-            .and_then(|fb| GdaNumTracker::new(&fb.directory, &fb.extension).ok());
-        let prev = match &fallback {
-            Some(nt) => Some(nt.latest_scan_number().await?),
-            None => None,
-        };
+        let dir = nt.for_beamline(&beamline, current.extension()).await?;
 
-        let next_scan = db.next_scan_configuration(&beamline, prev).await?;
-        if let Some(nt) = &fallback {
-            if let Err(e) = nt.create_num_file(next_scan.scan_number()).await {
-                warn!("Failed to increment fallback tracker directory: {e}");
-            }
+        let next_scan = db
+            .next_scan_configuration(&beamline, dir.prev().await?)
+            .await?;
+
+        if let Err(e) = dir.set(next_scan.scan_number()).await {
+            warn!("Failed to increment fallback tracker directory: {e}");
         }
 
         Ok(ScanPaths {
@@ -329,7 +328,6 @@ struct ConfigurationUpdates {
     scan: Option<InputTemplate<ScanTemplate>>,
     detector: Option<InputTemplate<DetectorTemplate>>,
     scan_number: Option<u32>,
-    directory: Option<String>,
     extension: Option<String>,
 }
 
@@ -341,7 +339,6 @@ impl ConfigurationUpdates {
             visit: self.visit.map(|t| t.0),
             scan: self.scan.map(|t| t.0),
             detector: self.detector.map(|t| t.0),
-            directory: self.directory,
             extension: self.extension,
         }
     }

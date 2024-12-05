@@ -9,12 +9,6 @@ CREATE TABLE beamline (
     scan TEXT NOT NULL CHECK (length(scan) > 0),
     detector TEXT NOT NULL CHECK (length(detector) > 0),
 
-    fallback_directory TEXT,
-    fallback_extension TEXT,
-
-    -- Ensure fallback number files don't collide
-    UNIQUE(fallback_directory, fallback_extension),
-
-    -- Require a directory to be set if the extension is present
-    CHECK (fallback_extension ISNULL OR fallback_directory NOTNULL)
+    -- Override file tracker extension - defaults to beamline name
+    fallback_extension TEXT
 );

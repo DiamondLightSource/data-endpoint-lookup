@@ -65,7 +65,7 @@ pub struct BeamlineConfiguration {
     visit: RawPathTemplate<VisitTemplate>,
     scan: RawPathTemplate<ScanTemplate>,
     detector: RawPathTemplate<DetectorTemplate>,
-    fallback: Option<NumtrackerConfig>,
+    extension: Option<String>,
 }
 
 impl BeamlineConfiguration {
@@ -77,8 +77,8 @@ impl BeamlineConfiguration {
         self.scan_number
     }
 
-    pub fn fallback(&self) -> Option<&NumtrackerConfig> {
-        self.fallback.as_ref()
+    pub fn extension(&self) -> Option<&str> {
+        self.extension.as_deref()
     }
 
     pub fn visit(&self) -> SqliteTemplateResult<BeamlineField> {
@@ -104,7 +104,6 @@ impl<'r> FromRow<'r, SqliteRow> for BeamlineConfiguration {
             scan: row.try_get::<String, _>("scan")?,
             detector: row.try_get::<String, _>("detector")?,
             fallback_extension: row.try_get::<Option<String>, _>("fallback_extension")?,
-            fallback_directory: row.try_get::<Option<String>, _>("fallback_directory")?,
         }
         .into())
     }
@@ -117,7 +116,6 @@ pub struct BeamlineConfigurationUpdate {
     pub visit: Option<PathTemplate<BeamlineField>>,
     pub scan: Option<PathTemplate<ScanField>>,
     pub detector: Option<PathTemplate<DetectorField>>,
-    pub directory: Option<String>,
     pub extension: Option<String>,
 }
 
@@ -127,7 +125,6 @@ impl BeamlineConfigurationUpdate {
             && self.visit.is_none()
             && self.scan.is_none()
             && self.detector.is_none()
-            && self.directory.is_none()
             && self.extension.is_none()
     }
 
@@ -160,10 +157,6 @@ impl BeamlineConfigurationUpdate {
             fields.push("detector=");
             fields.push_bind_unseparated(detector.to_string());
         }
-        if let Some(dir) = &self.directory {
-            fields.push("fallback_directory=");
-            fields.push_bind_unseparated(dir);
-        }
         if let Some(ext) = &self.extension {
             if ext != &self.name {
                 // extension defaults to beamline name
@@ -194,7 +187,6 @@ impl BeamlineConfigurationUpdate {
             visit: self.visit.ok_or("visit")?.to_string(),
             scan: self.scan.ok_or("scan")?.to_string(),
             detector: self.detector.ok_or("detector")?.to_string(),
-            fallback_directory: self.directory,
             fallback_extension: self.extension,
         };
         Ok(dbc.insert_into(db).await?)
@@ -207,7 +199,6 @@ impl BeamlineConfigurationUpdate {
             visit: None,
             scan: None,
             detector: None,
-            directory: None,
             extension: None,
         }
     }
@@ -222,7 +213,6 @@ struct DbBeamlineConfig {
     visit: String,
     scan: String,
     detector: String,
-    fallback_directory: Option<String>,
     fallback_extension: Option<String>,
 }
 
@@ -234,16 +224,15 @@ impl DbBeamlineConfig {
         let bc = query_as!(
             DbBeamlineConfig,
             "INSERT INTO beamline
-                (name, scan_number, visit, scan, detector, fallback_directory, fallback_extension)
+                (name, scan_number, visit, scan, detector, fallback_extension)
             VALUES
-                (?,?,?,?,?,?,?)
+                (?,?,?,?,?,?)
             RETURNING *",
             self.name,
             self.scan_number,
             self.visit,
             self.scan,
             self.detector,
-            self.fallback_directory,
             self.fallback_extension
         )
         .fetch_one(&db.pool)
@@ -254,24 +243,13 @@ impl DbBeamlineConfig {
 
 impl From<DbBeamlineConfig> for BeamlineConfiguration {
     fn from(value: DbBeamlineConfig) -> Self {
-        let fallback = match (value.fallback_directory, value.fallback_extension) {
-            (None, _) => None,
-            (Some(dir), None) => Some(NumtrackerConfig {
-                directory: dir,
-                extension: value.name.clone(),
-            }),
-            (Some(dir), Some(ext)) => Some(NumtrackerConfig {
-                directory: dir,
-                extension: ext,
-            }),
-        };
         Self {
             name: value.name,
-            scan_number: u32::try_from(value.scan_number).expect("Run out of scan numbers"),
+            scan_number: u32::try_from(value.scan_number).expect("Out of scan numbers"),
             visit: value.visit.into(),
             scan: value.scan.into(),
             detector: value.detector.into(),
-            fallback,
+            extension: value.fallback_extension,
         }
     }
 }
@@ -461,7 +439,6 @@ mod db_tests {
                 "{subdirectory}/{instrument}-{scan_number}-{detector}",
             )
             .ok(),
-            directory: Some("/tmp/trackers".into()),
             extension: Some("ext".into()),
         }
     }
@@ -504,16 +481,6 @@ mod db_tests {
         init(&mut update);
         let bc = ok!(update.insert_new(&db));
         assert_eq!(bc.name(), "i22");
-    }
-
-    #[rstest]
-    #[test]
-    async fn extension_requires_directory(mut update: BeamlineConfigurationUpdate) {
-        let db = SqliteScanPathService::memory().await;
-        update.directory = None;
-        let e = err!(NewConfigurationError::Db, update.insert_new(&db));
-        let e = *e.into_database_error().unwrap().downcast::<SqliteError>();
-        assert_eq!(e.kind(), ErrorKind::CheckViolation)
     }
 
     #[rstest]
@@ -597,11 +564,10 @@ mod db_tests {
             conf.detector().unwrap().to_string(),
             "{subdirectory}/{instrument}-{scan_number}-{detector}"
         );
-        let Some(fb) = conf.fallback() else {
-            panic!("Missing fallback configuration");
+        let Some(ext) = conf.extension() else {
+            panic!("Missing extension");
         };
-        assert_eq!(fb.directory, "/tmp/trackers");
-        assert_eq!(fb.extension, "ext");
+        assert_eq!(ext, "ext");
     }
 
     type Update = BeamlineConfigurationUpdate;
@@ -619,12 +585,9 @@ mod db_tests {
     #[case::scan_number(
             |u: &mut Update| u.scan_number = Some(42),
             |u: BeamlineConfiguration| assert_eq!(u.scan_number(), 42))]
-    #[case::directory(
-            |u: &mut Update| u.directory = Some("/new_trackers".into()),
-            |u: BeamlineConfiguration| assert_eq!(u.fallback().unwrap().directory, "/new_trackers"))]
     #[case::extension(
             |u: &mut Update| u.extension = Some("new".into()),
-            |u: BeamlineConfiguration| assert_eq!(u.fallback().unwrap().extension, "new"))]
+            |u: BeamlineConfiguration| assert_eq!(u.extension().unwrap(), "new"))]
     #[tokio::test]
     async fn update_existing(
         #[future(awt)] db: SqliteScanPathService,
@@ -635,5 +598,12 @@ mod db_tests {
         init(&mut upd);
         let bc = ok!(upd.update_beamline(&db)).expect("Updated beamline missing");
         check(bc)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn empty_update(#[future(awt)] db: SqliteScanPathService) {
+        let upd = BeamlineConfigurationUpdate::empty("b21");
+        assert!(ok!(upd.update_beamline(&db)).is_none());
     }
 }

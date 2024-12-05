@@ -58,6 +58,9 @@ pub struct ServeOptions {
     /// The port to open for requests
     #[clap(short, long, default_value_t = 8000, env = "NUMTRACKER_PORT")]
     port: u16,
+    /// The root directory for external number tracking
+    #[clap(long, env = "NUMTRACKER_ROOT_DIRECTORY")]
+    root_directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -109,6 +112,9 @@ impl Verbosity {
 impl ServeOptions {
     pub(crate) fn addr(&self) -> (Ipv4Addr, u16) {
         (self.host, self.port)
+    }
+    pub(crate) fn root_directory(&self) -> Option<PathBuf> {
+        self.root_directory.clone()
     }
 }
 

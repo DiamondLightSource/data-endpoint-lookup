@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT * FROM beamline",
+  "query": "INSERT INTO beamline\n                (name, scan_number, visit, scan, detector, fallback_extension)\n            VALUES\n                (?,?,?,?,?,?)\n            RETURNING *",
   "describe": {
     "columns": [
       {
@@ -34,18 +34,13 @@
         "type_info": "Text"
       },
       {
-        "name": "fallback_directory",
-        "ordinal": 6,
-        "type_info": "Text"
-      },
-      {
         "name": "fallback_extension",
-        "ordinal": 7,
+        "ordinal": 6,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 6
     },
     "nullable": [
       false,
@@ -54,9 +49,8 @@
       false,
       false,
       false,
-      true,
       true
     ]
   },
-  "hash": "02d6faf0ffd8fb96031f7a8e824de4e4552ea72176c5e885cea3e517316e7774"
+  "hash": "77054c7c20195a2a7766eb83bf39add56ec84bb502ce39d26cd9394703bdd71a"
 }

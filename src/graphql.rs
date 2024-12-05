@@ -207,6 +207,13 @@ impl ScanPaths {
 
 #[Object]
 impl BeamlineConfiguration {
+    // We need to override name because otherwise it conflicts with the existing
+    // BeamlineConfiguration::name
+    #[graphql(name = "name")]
+    pub async fn configuration_name(&self) -> async_graphql::Result<String> {
+        Ok(self.name().to_owned())
+    }
+
     pub async fn visit_template(&self) -> async_graphql::Result<String> {
         Ok(self.visit()?.to_string())
     }

@@ -303,6 +303,15 @@ impl SqliteScanPathService {
         .ok_or(ConfigurationError::MissingBeamline(beamline.into()))
     }
 
+    pub async fn configurations(&self) -> Result<Vec<BeamlineConfiguration>, ConfigurationError> {
+        Ok(query_as!(DbBeamlineConfig, "SELECT * FROM beamline")
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(BeamlineConfiguration::from)
+            .collect())
+    }
+
     pub async fn next_scan_configuration(
         &self,
         beamline: &str,
@@ -583,6 +592,33 @@ mod db_tests {
     #[test]
     async fn current_configuration(#[future(awt)] db: SqliteScanPathService) {
         let conf = ok!(db.current_configuration("i22"));
+        assert_eq!(conf.name(), "i22");
+        assert_eq!(conf.scan_number(), 122);
+        assert_eq!(
+            conf.visit().unwrap().to_string(),
+            "/tmp/{instrument}/data/{year}/{visit}"
+        );
+        assert_eq!(
+            conf.scan().unwrap().to_string(),
+            "{subdirectory}/{instrument}-{scan_number}"
+        );
+        assert_eq!(
+            conf.detector().unwrap().to_string(),
+            "{subdirectory}/{instrument}-{scan_number}-{detector}"
+        );
+        let Some(fb) = conf.fallback() else {
+            panic!("Missing fallback configuration");
+        };
+        assert_eq!(fb.directory, "/tmp/trackers");
+        assert_eq!(fb.extension, "ext");
+    }
+
+    #[rstest]
+    #[test]
+    async fn configurations(#[future(awt)] db: SqliteScanPathService) {
+        let confs = ok!(db.configurations());
+        assert_eq!(confs.len(), 1);
+        let conf = confs.first().unwrap();
         assert_eq!(conf.name(), "i22");
         assert_eq!(conf.scan_number(), 122);
         assert_eq!(

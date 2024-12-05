@@ -255,14 +255,23 @@ impl Query {
     }
 
     #[instrument(skip(self, ctx))]
-    async fn configuration(
+    async fn configurations(
         &self,
         ctx: &Context<'_>,
-        beamline: String,
-    ) -> async_graphql::Result<BeamlineConfiguration> {
+        beamline_filter: Option<String>,
+    ) -> async_graphql::Result<Vec<BeamlineConfiguration>> {
         let db = ctx.data::<SqliteScanPathService>()?;
-        trace!("Getting config for {beamline:?}");
-        Ok(db.current_configuration(&beamline).await?)
+        match beamline_filter {
+            Some(filter) => {
+                trace!("Getting configs matching {filter:?}");
+                let singleton = db.current_configuration(&filter).await?;
+                Ok(vec![singleton])
+            }
+            None => {
+                trace!("Getting all configs");
+                Ok(db.configurations().await?)
+            }
+        }
     }
 }
 

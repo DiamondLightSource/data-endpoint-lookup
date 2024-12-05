@@ -27,12 +27,16 @@ use async_graphql::{
     Scalar, ScalarType, Schema, SimpleObject, Value,
 };
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use auth::PolicyCheck;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use chrono::{Datelike, Local};
 use tokio::net::TcpListener;
-use tracing::{info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::cli::ServeOptions;
 use crate::db_service::{
@@ -45,23 +49,27 @@ use crate::paths::{
 };
 use crate::template::{FieldSource, PathTemplate};
 
+mod auth;
+
 pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
     let db = SqliteScanPathService::connect(db)
         .await
         .expect("Unable to open DB");
     info!("Serving graphql endpoints on {:?}", opts.addr());
+    let addr = opts.addr();
     let schema = Schema::build(Query, Mutation, EmptySubscription)
         .extension(Tracing)
         .limit_directives(32)
         .data(db)
+        .data(opts.policy.map(PolicyCheck::new))
         .finish();
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/graphiql", get(graphiql))
         .layer(Extension(schema));
-    let listener = TcpListener::bind(opts.addr())
+    let listener = TcpListener::bind(addr)
         .await
-        .unwrap_or_else(|_| panic!("Port {:?} in use", opts.addr()));
+        .unwrap_or_else(|_| panic!("Port {:?} in use", addr));
     axum::serve(listener, app)
         .await
         .expect("Can't serve graphql endpoint");
@@ -79,10 +87,13 @@ async fn graphiql() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn graphql_handler(
     schema: Extension<Schema<Query, Mutation, EmptySubscription>>,
+    auth_token: Option<TypedHeader<Authorization<Bearer>>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    let inner = req.into_inner();
-    schema.execute(inner).await.into()
+    schema
+        .execute(req.into_inner().data(auth_token.map(|header| header.0)))
+        .await
+        .into()
 }
 
 /// Read-only API for GraphQL
@@ -260,6 +271,14 @@ impl Query {
         ctx: &Context<'_>,
         beamline: String,
     ) -> async_graphql::Result<BeamlineConfiguration> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            debug!("Auth enabled: checking token");
+            let token = ctx.data::<Option<Authorization<Bearer>>>()?;
+            policy
+                .check_admin(token.as_ref(), &beamline)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Getting config for {beamline:?}");
         Ok(db.current_configuration(&beamline).await?)
@@ -277,6 +296,14 @@ impl Mutation {
         visit: String,
         sub: Option<Subdirectory>,
     ) -> async_graphql::Result<ScanPaths> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            trace!("Auth enabled: checking token");
+            let token = ctx.data::<Option<Authorization<Bearer>>>()?;
+            policy
+                .check_access(token.as_ref(), &beamline, &visit)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         // There is a race condition here if a process increments the file
         // while the DB is being queried or between the two queries but there
@@ -313,6 +340,14 @@ impl Mutation {
         beamline: String,
         config: ConfigurationUpdates,
     ) -> async_graphql::Result<BeamlineConfiguration> {
+        if let Some(policy) = ctx.data::<Option<PolicyCheck>>()? {
+            trace!("Auth enabled: checking token");
+            let token = ctx.data::<Authorization<Bearer>>().ok();
+            policy
+                .check_admin(token, &beamline)
+                .await
+                .inspect_err(|e| info!("Authorization failed: {e:?}"))?;
+        }
         let db = ctx.data::<SqliteScanPathService>()?;
         trace!("Configuring: {beamline}: {config:?}");
         let upd = config.into_update(beamline);

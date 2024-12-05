@@ -58,6 +58,28 @@ pub struct ServeOptions {
     /// The port to open for requests
     #[clap(short, long, default_value_t = 8000, env = "NUMTRACKER_PORT")]
     port: u16,
+    #[clap(flatten, next_help_heading = "Authorization")]
+    pub policy: Option<PolicyOptions>,
+}
+
+#[derive(Debug, Default, Parser)]
+#[group(requires = "policy_host")]
+pub struct PolicyOptions {
+    /// Beamline Policy Endpoint
+    ///
+    /// eg, https://authz.diamond.ac.uk
+    #[clap(long = "policy", required = false)]
+    pub policy_host: String,
+    /// The Rego rule used to generate visit access data
+    ///
+    /// eg. v1/data/diamond/policy/session/write_to_beamline_visit
+    #[clap(long, required = false)]
+    pub visit_query: String,
+    /// The Rego rule used to generate admin access data
+    ///
+    /// eg. v1/data/diamond/policy/admin/configure_beamline
+    #[clap(long, required = false)]
+    pub admin_query: String,
 }
 
 #[derive(Debug, Args)]

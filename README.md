@@ -109,13 +109,13 @@ Get the visit directory for a beamline and visit
 }
 ```
 
-#### configuration
+#### configurations
 Get the current configuration values for the given beamline
 
 ##### Query
 ```graphql
 {
-  configuration(beamline: "i22") {
+  configurations(beamlineFilter: "i22") {
     visitTemplate
     scanTemplate
     detectorTemplate
@@ -127,12 +127,14 @@ Get the current configuration values for the given beamline
 ##### Response
 ```json
 {
-  "configuration": {
-    "visitTemplate": "/data/{instrument}/data/{year}/{visit}",
-    "scanTemplate": "{subdirectory}/{instrument}-{scan_number}",
-    "detectorTemplate": "{subdirectory}/{instrument}-{scan_number}-{detector}",
-    "latestScanNumber": 20839
-  }
+  "configurations": [
+    {
+      "visitTemplate": "/tmp/{instrument}/data/{year}/{visit}",
+      "scanTemplate": "{subdirectory}/{instrument}-{scan_number}",
+      "detectorTemplate": "{subdirectory}/{instrument}-{scan_number}-{detector}",
+      "latestScanNumber": 12345
+    }
+  ]
 }
 ```
 

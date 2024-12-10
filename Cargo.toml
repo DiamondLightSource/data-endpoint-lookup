@@ -29,3 +29,4 @@ url = "2.5.2"
 [dev-dependencies]
 async-std = { version = "1.13.0", features = ["attributes"], default-features = false }
 rstest = "0.23.0"
+tempfile = "3.14.0"

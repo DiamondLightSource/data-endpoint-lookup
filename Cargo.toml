@@ -20,7 +20,7 @@ opentelemetry-otlp = "0.17.0"
 opentelemetry-semantic-conventions = "0.16.0"
 opentelemetry-stdout = "0.5.0"
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
-reqwest = { version = "0.12.7", features = ["json"] }
+reqwest = { version = "0.12.7", features = ["json", "rustls-tls-native-roots"], default-features = false }
 serde = { version = "1.0.210", features = ["derive"] }
 sqlx = { version = "0.8.0", features = ["runtime-tokio", "sqlite"] }
 tokio = { version = "1.39.2", features = ["full"] }

@@ -127,3 +127,97 @@ impl TracingOptions {
         self.tracing_level
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use clap::error::ErrorKind;
+    use clap::Parser;
+    use tracing::Level;
+
+    use super::Cli;
+    use crate::cli::Command;
+    const APP: &str = "numtracker";
+
+    #[test]
+    fn serve_defaults() {
+        let cli = Cli::try_parse_from([APP, "serve"]).unwrap();
+        assert_eq!(cli.db, PathBuf::from("numtracker.db"));
+        assert_eq!(cli.verbose.log_level(), Some(Level::ERROR));
+
+        assert_eq!(cli.tracing().tracing_url(), None);
+        assert_eq!(cli.tracing().level(), Level::INFO);
+
+        let Command::Serve(cmd) = cli.command else {
+            panic!("Unexpected subcommand: {:?}", cli.command);
+        };
+        assert_eq!(cmd.addr(), ("0.0.0.0".parse().unwrap(), 8000));
+        assert_eq!(cmd.root_directory(), None);
+    }
+
+    #[test]
+    fn global_verbose() {
+        let cli = Cli::try_parse_from([APP, "-vv", "serve"]).unwrap();
+        assert_eq!(cli.log_level(), Some(Level::DEBUG));
+
+        let cli = Cli::try_parse_from([APP, "serve", "-v"]).unwrap();
+        assert_eq!(cli.log_level(), Some(Level::INFO));
+
+        let cli = Cli::try_parse_from([APP, "schema", "-q"]).unwrap();
+        assert_eq!(cli.log_level(), None);
+    }
+
+    #[test]
+    fn exclusive_quiet_verbose() {
+        let err = Cli::try_parse_from([APP, "schema", "-q", "-v"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn max_verbosity() {
+        let cli = Cli::try_parse_from([APP, "-vvv", "serve"]).unwrap();
+        assert_eq!(cli.log_level(), Some(Level::TRACE));
+
+        // Adding more flags does nothing but isn't an error
+        let cli = Cli::try_parse_from([APP, "-vvvv", "serve"]).unwrap();
+        assert_eq!(cli.log_level(), Some(Level::TRACE));
+
+        let cli = Cli::try_parse_from([APP, "-vvvvv", "serve"]).unwrap();
+        assert_eq!(cli.log_level(), Some(Level::TRACE));
+    }
+
+    #[test]
+    fn tracing_opts() {
+        let cli = Cli::try_parse_from([APP, "--tracing", "https://tracing.example.com", "serve"])
+            .unwrap();
+        assert_eq!(
+            cli.tracing().tracing_url(),
+            Some("https://tracing.example.com".parse().unwrap())
+        );
+        assert_eq!(cli.tracing().level(), Level::INFO);
+
+        let cli = Cli::try_parse_from([
+            APP,
+            "--tracing",
+            "https://tracing.example.com",
+            "--tracing-level",
+            "DEBUG",
+            "serve",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.tracing().tracing_url(),
+            Some("https://tracing.example.com".parse().unwrap())
+        );
+        assert_eq!(cli.tracing().level(), Level::DEBUG);
+    }
+
+    #[test]
+    fn schema_command() {
+        let cli = Cli::try_parse_from([APP, "schema"]).unwrap();
+        let Command::Schema = cli.command else {
+            panic!("Unexpected command: {:?}", cli.command);
+        };
+    }
+}

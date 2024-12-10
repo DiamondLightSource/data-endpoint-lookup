@@ -210,6 +210,13 @@ impl ScanPaths {
 
 #[Object]
 impl BeamlineConfiguration {
+    // We need to override name because otherwise it conflicts with the existing
+    // BeamlineConfiguration::name
+    #[graphql(name = "name")]
+    pub async fn configuration_name(&self) -> async_graphql::Result<String> {
+        Ok(self.name().to_owned())
+    }
+
     pub async fn visit_template(&self) -> async_graphql::Result<String> {
         Ok(self.visit()?.to_string())
     }
@@ -258,14 +265,23 @@ impl Query {
     }
 
     #[instrument(skip(self, ctx))]
-    async fn configuration(
+    async fn configurations(
         &self,
         ctx: &Context<'_>,
-        beamline: String,
-    ) -> async_graphql::Result<BeamlineConfiguration> {
+        beamline_filter: Option<String>,
+    ) -> async_graphql::Result<Vec<BeamlineConfiguration>> {
         let db = ctx.data::<SqliteScanPathService>()?;
-        trace!("Getting config for {beamline:?}");
-        Ok(db.current_configuration(&beamline).await?)
+        match beamline_filter {
+            Some(filter) => {
+                trace!("Getting configs matching {filter:?}");
+                let singleton = db.current_configuration(&filter).await?;
+                Ok(vec![singleton])
+            }
+            None => {
+                trace!("Getting all configs");
+                Ok(db.configurations().await?)
+            }
+        }
     }
 }
 

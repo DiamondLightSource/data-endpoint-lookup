@@ -170,9 +170,10 @@ mod tests {
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{AccessRequest, AdminRequest, InvalidVisit, PolicyCheck, Visit, AUDIENCE};
+    use super::{
+        AccessRequest, AdminRequest, AuthError, InvalidVisit, PolicyCheck, Visit, AUDIENCE,
+    };
     use crate::cli::PolicyOptions;
-    use crate::graphql::auth::AuthError;
 
     fn token(name: &'static str) -> Option<Authorization<Bearer>> {
         Some(Authorization(

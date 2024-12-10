@@ -13,6 +13,7 @@ const AUDIENCE: &str = "account";
 type Token = Authorization<Bearer>;
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct Response {
     result: bool,
 }
@@ -171,7 +172,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        AccessRequest, AdminRequest, AuthError, InvalidVisit, PolicyCheck, Visit, AUDIENCE,
+        AccessRequest, AdminRequest, AuthError, InvalidVisit, PolicyCheck, Response, Visit,
+        AUDIENCE,
     };
     use crate::cli::PolicyOptions;
 
@@ -212,7 +214,7 @@ mod tests {
                         proposal: 1234,
                         audience: AUDIENCE,
                     });
-                then.status(200).body(r#"{"result": true}"#);
+                then.status(200).json_body_obj(&Response { result: true });
             })
             .await;
         let check = PolicyCheck::new(PolicyOptions {
@@ -239,7 +241,7 @@ mod tests {
                         beamline: "i22",
                         audience: AUDIENCE,
                     });
-                then.status(200).body(r#"{"result": true}"#);
+                then.status(200).json_body_obj(&Response { result: true });
             })
             .await;
         let check = PolicyCheck::new(PolicyOptions {
@@ -268,7 +270,7 @@ mod tests {
                         visit: 4,
                         audience: AUDIENCE,
                     });
-                then.status(200).body(r#"{"result": false}"#);
+                then.status(200).json_body_obj(&Response { result: false });
             })
             .await;
         let check = PolicyCheck::new(PolicyOptions {
@@ -298,7 +300,7 @@ mod tests {
                         beamline: "i22",
                         audience: AUDIENCE,
                     });
-                then.status(200).body(r#"{"result": false}"#);
+                then.status(200).json_body_obj(&Response { result: false });
             })
             .await;
         let check = PolicyCheck::new(PolicyOptions {

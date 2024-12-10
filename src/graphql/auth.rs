@@ -18,6 +18,7 @@ struct Response {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct AccessRequest<'a> {
     token: &'a str,
     audience: &'a str,
@@ -39,6 +40,7 @@ impl<'a> AccessRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct AdminRequest<'a> {
     token: &'a str,
     audience: &'a str,
@@ -155,5 +157,219 @@ impl std::error::Error for AuthError {
 impl From<reqwest::Error> for AuthError {
     fn from(value: reqwest::Error) -> Self {
         Self::ServerError(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use axum::http::HeaderValue;
+    use axum_extra::headers::authorization::{Bearer, Credentials};
+    use axum_extra::headers::Authorization;
+    use httpmock::MockServer;
+    use rstest::rstest;
+
+    use super::{AccessRequest, AdminRequest, InvalidVisit, PolicyCheck, Visit, AUDIENCE};
+    use crate::cli::PolicyOptions;
+    use crate::graphql::auth::AuthError;
+
+    fn token(name: &'static str) -> Option<Authorization<Bearer>> {
+        Some(Authorization(
+            Bearer::decode(&HeaderValue::from_str(&format!("Bearer {name}")).unwrap()).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn valid_visit() {
+        let visit = Visit::from_str("cm12345-1").unwrap();
+        assert_eq!(visit.session, 1);
+        assert_eq!(visit.proposal, 12345);
+    }
+
+    #[rstest]
+    #[case::no_proposal("cm-3")]
+    #[case::no_session("cm12345")]
+    #[case::invalid_session("cm12345-abc")]
+    #[case::invalid_proposal("cm123abc-12")]
+    #[case::negative_session("cm1234--12")]
+    fn invalid_visit(#[case] visit: &str) {
+        assert!(matches!(Visit::from_str(visit), Err(InvalidVisit)))
+    }
+
+    #[tokio::test]
+    async fn successful_access_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/demo/access")
+                    .json_body_obj(&AccessRequest {
+                        token: "token",
+                        beamline: "i22",
+                        visit: 4,
+                        proposal: 1234,
+                        audience: AUDIENCE,
+                    });
+                then.status(200).body(r#"{"result": true}"#);
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        check
+            .check_access(token("token").as_ref(), "i22", "cm1234-4")
+            .await
+            .unwrap();
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn successful_admin_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/demo/admin")
+                    .json_body_obj(&AdminRequest {
+                        token: "token",
+                        beamline: "i22",
+                        audience: AUDIENCE,
+                    });
+                then.status(200).body(r#"{"result": true}"#);
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        check
+            .check_admin(token("token").as_ref(), "i22")
+            .await
+            .unwrap();
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn denied_access_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/demo/access")
+                    .json_body_obj(&AccessRequest {
+                        token: "token",
+                        beamline: "i22",
+                        proposal: 1234,
+                        visit: 4,
+                        audience: AUDIENCE,
+                    });
+                then.status(200).body(r#"{"result": false}"#);
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+
+        let result = check
+            .check_access(token("token").as_ref(), "i22", "cm1234-4")
+            .await;
+        let Err(AuthError::Failed) = result else {
+            panic!("Unexpected result from unauthorised check: {result:?}");
+        };
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn denied_admin_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/demo/admin")
+                    .json_body_obj(&AdminRequest {
+                        token: "token",
+                        beamline: "i22",
+                        audience: AUDIENCE,
+                    });
+                then.status(200).body(r#"{"result": false}"#);
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        let result = check.check_admin(token("token").as_ref(), "i22").await;
+        let Err(AuthError::Failed) = result else {
+            panic!("Unexpected result from unauthorised check: {result:?}");
+        };
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn unauthorised_access_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|_, _| {
+                // mock that rejects every request
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        let result = check.check_access(None, "i22", "cm1234-4").await;
+        let Err(AuthError::Missing) = result else {
+            panic!("Unexpected result from unauthorised check: {result:?}");
+        };
+        mock.assert_hits(0);
+    }
+
+    #[tokio::test]
+    async fn unauthorised_admin_check() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|_, _| {
+                // mock that rejects every request
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        let result = check.check_admin(None, "i22").await;
+        let Err(AuthError::Missing) = result else {
+            panic!("Unexpected result from unauthorised check: {result:?}");
+        };
+        mock.assert_hits(0);
+    }
+
+    #[tokio::test]
+    async fn server_error() {
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("POST");
+                then.status(503);
+            })
+            .await;
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            visit_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        let result = check.check_admin(token("token").as_ref(), "i22").await;
+        let Err(AuthError::ServerError(_)) = result else {
+            panic!("Unexpected result from unauthorised check: {result:?}");
+        };
+        mock.assert();
     }
 }

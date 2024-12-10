@@ -1,8 +1,8 @@
 FROM rust:1.82.0-slim AS build
 
 RUN rustup target add x86_64-unknown-linux-musl && \
-    apt update && \
-    apt install -y musl-tools musl-dev && \
+    apt-get update && \
+    apt-get install -y musl-tools musl-dev && \
     update-ca-certificates
 
 COPY ./Cargo.toml ./Cargo.toml

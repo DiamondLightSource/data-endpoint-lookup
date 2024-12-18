@@ -17,6 +17,8 @@ use std::fmt::{self, Display};
 use std::io::Error;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+pub use tests::TempTracker;
 use tokio::fs as async_fs;
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{instrument, trace};
@@ -168,9 +170,10 @@ impl std::error::Error for InvalidExtension {}
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::ops::Deref;
+    use std::path::Path;
     use std::time::Duration;
+    use std::{fs, io};
 
     use rstest::{fixture, rstest};
     use tempfile::{tempdir, TempDir};
@@ -179,7 +182,17 @@ mod tests {
     use super::{InvalidExtension, NumTracker};
 
     /// Wrapper around a NumTracker to ensure the tempdir is not dropped while it is still required
-    struct TempTracker(NumTracker, TempDir);
+    pub struct TempTracker(pub NumTracker, pub TempDir);
+    impl TempTracker {
+        pub fn new<F>(init: F) -> Self
+        where
+            F: for<'f> FnOnce(&'f Path) -> io::Result<()>,
+        {
+            let root = tempdir().unwrap();
+            init(root.as_ref()).unwrap();
+            Self(NumTracker::for_root_directory(Some(&root)).unwrap(), root)
+        }
+    }
     impl Deref for TempTracker {
         type Target = NumTracker;
 

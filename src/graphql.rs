@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
 use std::future::Future;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -79,9 +80,9 @@ pub async fn serve_graphql(db: &Path, opts: ServeOptions) {
         .expect("Can't serve graphql endpoint");
 }
 
-pub fn graphql_schema() {
+pub fn graphql_schema<W: Write>(mut out: W) -> Result<(), std::io::Error> {
     let schema = Schema::new(Query, Mutation, EmptySubscription);
-    println!("{}", schema.sdl());
+    write!(out, "{}", schema.sdl())
 }
 
 async fn graphiql() -> impl IntoResponse {
@@ -527,6 +528,425 @@ impl Detector {
 }
 
 #[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::fs;
+
+    use async_graphql::{EmptySubscription, InputType as _, Request, Schema, SchemaBuilder, Value};
+    use axum::http::HeaderValue;
+    use axum_extra::headers::authorization::{Bearer, Credentials};
+    use axum_extra::headers::Authorization;
+    use httpmock::MockServer;
+    use rstest::{fixture, rstest};
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    use super::auth::PolicyCheck;
+    use super::{ConfigurationUpdates, InputTemplate, Mutation, Query};
+    use crate::cli::PolicyOptions;
+    use crate::db_service::SqliteScanPathService;
+    use crate::graphql::graphql_schema;
+    use crate::numtracker::TempTracker;
+
+    type NtSchema = Schema<Query, Mutation, EmptySubscription>;
+    type NtBuilder = SchemaBuilder<Query, Mutation, EmptySubscription>;
+
+    struct TestEnv {
+        schema: NtSchema,
+        dir: TempDir,
+        db: SqliteScanPathService,
+    }
+
+    struct TestAuthEnv {
+        schema: NtSchema,
+        dir: TempDir,
+        db: SqliteScanPathService,
+        server: MockServer,
+    }
+
+    fn updates(
+        visit: Option<&str>,
+        scan: Option<&str>,
+        det: Option<&str>,
+        num: Option<u32>,
+        ext: Option<&str>,
+    ) -> ConfigurationUpdates {
+        ConfigurationUpdates {
+            visit: visit.map(|v| InputTemplate::parse(Some(Value::String(v.into()))).unwrap()),
+            scan: scan.map(|s| InputTemplate::parse(Some(Value::String(s.into()))).unwrap()),
+            detector: det.map(|d| InputTemplate::parse(Some(Value::String(d.into()))).unwrap()),
+            scan_number: num,
+            extension: ext.map(|e| e.into()),
+        }
+    }
+
+    /// Helper for creating graphql values from literals
+    macro_rules! value {
+        ($tree:tt) => {
+            Value::from_json(json!($tree)).unwrap()
+        };
+    }
+
+    #[fixture]
+    async fn db() -> SqliteScanPathService {
+        let db = SqliteScanPathService::memory().await;
+        let cfg = updates(
+            Some("/tmp/{instrument}/data/{visit}/"),
+            Some("{subdirectory}/{instrument}-{scan_number}"),
+            Some("{subdirectory}/{instrument}-{scan_number}-{detector}"),
+            Some(122),
+            None,
+        );
+        cfg.into_update("i22".into()).insert_new(&db).await.unwrap();
+        let cfg = updates(
+            Some("/tmp/{instrument}/data/{visit}/"),
+            Some("{subdirectory}/{instrument}-{scan_number}"),
+            Some("{subdirectory}/{scan_number}/{instrument}-{scan_number}-{detector}"),
+            Some(621),
+            Some("b21_ext"),
+        );
+        cfg.into_update("b21".into()).insert_new(&db).await.unwrap();
+        db
+    }
+
+    #[fixture]
+    async fn components(
+        #[future(awt)] db: SqliteScanPathService,
+    ) -> (NtBuilder, TempDir, SqliteScanPathService) {
+        let TempTracker(nt, dir) = TempTracker::new(|p| {
+            fs::create_dir(p.join("i22"))?;
+            fs::File::create_new(p.join("i22").join("122.i22"))?;
+            fs::create_dir(p.join("b21"))?;
+            fs::File::create_new(p.join("b21").join("211.b21_ext"))?;
+            Ok(())
+        });
+        (
+            Schema::build(Query, Mutation, EmptySubscription)
+                .data(db.clone())
+                .data(nt),
+            dir,
+            db,
+        )
+    }
+
+    #[fixture]
+    async fn env(
+        #[future(awt)] components: (NtBuilder, TempDir, SqliteScanPathService),
+    ) -> TestEnv {
+        TestEnv {
+            schema: components.0.data(Option::<PolicyCheck>::None).finish(),
+            dir: components.1,
+            db: components.2,
+        }
+    }
+
+    #[fixture]
+    async fn auth_env(
+        #[future(awt)] components: (NtBuilder, TempDir, SqliteScanPathService),
+    ) -> TestAuthEnv {
+        let server = MockServer::start();
+        let check = PolicyCheck::new(PolicyOptions {
+            policy_host: server.url(""),
+            access_query: "demo/access".into(),
+            admin_query: "demo/admin".into(),
+        });
+        TestAuthEnv {
+            schema: components.0.data(Some(check)).finish(),
+            dir: components.1,
+            db: components.2,
+            server,
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn missing_config(#[future(awt)] env: TestEnv) {
+        let result = env
+            .schema
+            .execute(r#"{paths(beamline: "i11", visit: "cm1234-5") {directory}}"#)
+            .await;
+
+        assert_eq!(result.data, Value::Null);
+        println!("{result:?}");
+        assert_eq!(
+            result.errors[0].message,
+            r#"No configuration available for beamline "i11""#
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn paths(#[future(awt)] env: TestEnv) {
+        let result = env
+            .schema
+            .execute(r#"{paths(beamline: "i22", visit: "cm12345-3") {directory visit}}"#)
+            .await;
+        println!("{result:#?}");
+        let exp = value!({"paths": {"visit": "cm12345-3", "directory": "/tmp/i22/data/cm12345-3"}});
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, exp);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn scan(#[future(awt)] env: TestEnv) {
+        let query = r#"mutation {
+            scan(beamline: "i22", visit: "cm12345-3", sub: "foo/bar") {
+                visit { beamline directory visit} scanFile scanNumber
+                detectors(names: ["det_one", "det_two"]) { name path }
+            }
+        }"#;
+        let result = env.schema.execute(query).await;
+
+        println!("{result:#?}");
+        assert!(result.errors.is_empty());
+        let exp = value!({
+        "scan": {
+            "visit": {"visit": "cm12345-3", "beamline": "i22", "directory": "/tmp/i22/data/cm12345-3"},
+            "scanFile": "foo/bar/i22-123",
+            "scanNumber": 123,
+            "detectors": [
+                {"path": "foo/bar/i22-123-det_one", "name": "det_one"},
+                {"path": "foo/bar/i22-123-det_two", "name": "det_two"}
+            ]
+        }});
+        assert_eq!(result.data, exp);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn configuration(#[future(awt)] env: TestEnv) {
+        let query = r#"{
+        configuration(beamline: "i22") {
+            visitTemplate scanTemplate detectorTemplate latestScanNumber
+        }}"#;
+        let result = env.schema.execute(query).await;
+        let exp = value!({
+        "configuration": {
+            "visitTemplate": "/tmp/{instrument}/data/{visit}",
+            "scanTemplate": "{subdirectory}/{instrument}-{scan_number}",
+            "detectorTemplate": "{subdirectory}/{instrument}-{scan_number}-{detector}",
+            "latestScanNumber": 122
+        }});
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, exp);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn empty_configure_for_existing(#[future(awt)] env: TestEnv) {
+        let query = r#"mutation {
+            configure(beamline: "i22", config: {}) {
+                visitTemplate scanTemplate detectorTemplate latestScanNumber
+            }
+        }"#;
+        let result = env.schema.execute(query).await;
+        let exp = value!({
+            "configure": {
+                "visitTemplate": "/tmp/{instrument}/data/{visit}",
+                "scanTemplate": "{subdirectory}/{instrument}-{scan_number}",
+                "detectorTemplate": "{subdirectory}/{instrument}-{scan_number}-{detector}",
+                "latestScanNumber": 122
+            }
+        });
+        println!("{result:#?}");
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, exp);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn configure_template_for_existing(
+        #[future(awt)] env: TestEnv,
+    ) -> Result<(), Box<dyn Error>> {
+        let query = r#"mutation {
+        configure(beamline: "i22", config: { scan: "{instrument}-{scan_number}"}) {
+            scanTemplate
+        }}"#;
+        let result = env.schema.execute(query).await;
+        let exp = value!({"configure": { "scanTemplate": "{instrument}-{scan_number}"}});
+        println!("{result:#?}");
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, exp);
+        let new = env
+            .db
+            .current_configuration("i22")
+            .await?
+            .scan()?
+            .to_string();
+        assert_eq!(new, "{instrument}-{scan_number}");
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn configure_new_beamline(#[future(awt)] env: TestEnv) {
+        assert_matches::assert_matches!(
+            env.db.current_configuration("i16").await,
+            Err(crate::db_service::ConfigurationError::MissingBeamline(bl)) if bl == "i16"
+        );
+
+        let result = env
+            .schema
+            .execute(
+                r#"mutation {
+                    configure(beamline: "i16", config: {
+                        visit: "/tmp/{instrument}/{year}/{visit}"
+                        scan: "{instrument}-{scan_number}"
+                        detector: "{scan_number}-{detector}"
+                    }) {
+                        scanTemplate visitTemplate detectorTemplate latestScanNumber
+                    }
+                }"#,
+            )
+            .await;
+        let exp = value!({ "configure": {
+                "visitTemplate": "/tmp/{instrument}/{year}/{visit}",
+                "scanTemplate": "{instrument}-{scan_number}",
+                "detectorTemplate": "{scan_number}-{detector}",
+                "latestScanNumber": 0
+            } });
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, exp);
+        _ = env.db.current_configuration("i16").await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unauthorised_scan_request(#[future(awt)] auth_env: TestAuthEnv) {
+        let query = r#"mutation {scan(beamline: "i22", visit: "cm12345-3") { scanNumber }}"#;
+        let result = auth_env
+            .schema
+            .execute(Request::new(query).data(Option::<Authorization<Bearer>>::None))
+            .await;
+
+        println!("{result:#?}");
+        assert_eq!(
+            result.errors[0].message,
+            "No authentication token was provided"
+        );
+        assert_eq!(result.data, Value::Null);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn denied_scan_request(#[future(awt)] auth_env: TestAuthEnv) {
+        let query = r#"mutation{ scan(beamline: "i22", visit: "cm12345-3") { scanNumber }}"#;
+        let token = Some(Authorization(
+            Bearer::decode(&HeaderValue::from_str("Bearer token_value").unwrap()).unwrap(),
+        ));
+        let auth = auth_env
+            .server
+            .mock_async(|when, then| {
+                when.method("POST").path("/demo/access");
+                then.status(200).body(r#"{"result": false}"#);
+            })
+            .await;
+        let result = auth_env
+            .schema
+            .execute(Request::new(query).data(token))
+            .await;
+        auth.assert();
+
+        println!("{result:#?}");
+        assert_eq!(result.errors[0].message, "Authentication failed");
+        assert_eq!(result.data, Value::Null);
+
+        // Ensure that the number wasn't incremented
+        assert_eq!(
+            auth_env
+                .db
+                .current_configuration("i22")
+                .await
+                .unwrap()
+                .scan_number(),
+            122
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn authorized_scan_request(#[future(awt)] auth_env: TestAuthEnv) {
+        let query = r#"mutation{ scan(beamline: "i22", visit: "cm12345-3") { scanNumber }}"#;
+        let token = Some(Authorization(
+            Bearer::decode(&HeaderValue::from_str("Bearer token_value").unwrap()).unwrap(),
+        ));
+        let auth = auth_env
+            .server
+            .mock_async(|when, then| {
+                when.method("POST").path("/demo/access");
+                then.status(200).body(r#"{"result": true}"#);
+            })
+            .await;
+        let result = auth_env
+            .schema
+            .execute(Request::new(query).data(token))
+            .await;
+        auth.assert();
+
+        println!("{result:#?}");
+        assert!(result.errors.is_empty());
+        assert_eq!(result.data, value!({"scan": {"scanNumber": 123}}));
+        // Ensure that the number was incremented
+        assert_eq!(
+            auth_env
+                .db
+                .current_configuration("i22")
+                .await
+                .unwrap()
+                .scan_number(),
+            123
+        );
+        assert!(
+            tokio::fs::try_exists(auth_env.dir.as_ref().join("i22").join("123.i22"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn scan_numbers_synced_with_external(#[future(awt)] env: TestEnv) {
+        tokio::fs::File::create_new(env.dir.as_ref().join("i22").join("5678.i22"))
+            .await
+            .unwrap();
+        let query = r#"mutation { scan(beamline: "i22", visit:"cm12345-3") { scanNumber }}"#;
+        let result = env.schema.execute(query).await;
+        let exp = value!({"scan": {"scanNumber": 5679}});
+
+        assert_eq!(result.data, exp);
+
+        // DB number has been updated
+        assert_eq!(
+            env.db
+                .current_configuration("i22")
+                .await
+                .unwrap()
+                .scan_number(),
+            5679
+        );
+
+        // File has been updated
+        assert!(
+            tokio::fs::try_exists(env.dir.as_ref().join("i22").join("5679.i22"))
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Ensure that the schema has not changed unintentionally. Might end up being a pain to
+    /// maintain but should hopefully be fairly stable once the API has stabilised.
+    #[test]
+    fn schema_sdl() {
+        let mut buf = Vec::new();
+        graphql_schema(&mut buf).unwrap();
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            include_str!("../static/service_schema")
+        );
+    }
+}
+#[cfg(test)]
 mod subdirectory_tests {
     use async_graphql::{InputType as _, InputValueResult, Number, Value};
 
@@ -584,17 +1004,25 @@ mod detector_tests {
 
 #[cfg(test)]
 mod input_template_tests {
-    use async_graphql::{InputType as _, Value};
+    use async_graphql::{InputType, Value};
 
     use super::InputTemplate;
     use crate::paths::{DetectorTemplate, ScanTemplate, VisitTemplate};
 
     #[test]
     fn valid_visit_template() {
-        InputTemplate::<VisitTemplate>::parse(Some(Value::String(
+        let template = InputTemplate::<VisitTemplate>::parse(Some(Value::String(
             "/tmp/{instrument}/data/{visit}".into(),
         )))
         .unwrap();
+        assert_eq!(
+            template.as_raw_value().unwrap().to_string(),
+            "/tmp/{instrument}/data/{visit}"
+        );
+        assert_eq!(
+            template.to_value(),
+            Value::String("/tmp/{instrument}/data/{visit}".into())
+        )
     }
 
     #[rstest::rstest]
@@ -621,5 +1049,13 @@ mod input_template_tests {
     #[case::invalid_template("tmp/{nested{placeholder}}")]
     fn invalid_detector_template(#[case] path: String) {
         InputTemplate::<DetectorTemplate>::parse(Some(Value::String(path))).unwrap_err();
+    }
+
+    #[rstest::rstest]
+    #[case::integer(Some(Value::Number(42.into())))]
+    #[case::list(Some(Value::List(vec![Value::Number(211.into())])))]
+    #[case::none(None)]
+    fn invalid_value_type(#[case] value: Option<Value>) {
+        InputTemplate::<ScanTemplate>::parse(value).unwrap_err();
     }
 }

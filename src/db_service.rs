@@ -16,7 +16,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::Path;
 
-use error::{ConfigurationError, NewConfigurationError};
+pub use error::ConfigurationError;
+use error::NewConfigurationError;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sqlx::{query_as, FromRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use tracing::{info, instrument, trace};
@@ -300,7 +301,7 @@ impl SqliteScanPathService {
     }
 
     #[cfg(test)]
-    async fn ro_memory() -> Self {
+    pub(crate) async fn ro_memory() -> Self {
         let db = Self::memory().await;
         db.pool
             .set_connect_options(SqliteConnectOptions::new().read_only(true));
@@ -308,7 +309,7 @@ impl SqliteScanPathService {
     }
 
     #[cfg(test)]
-    async fn memory() -> Self {
+    pub(crate) async fn memory() -> Self {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::migrate!().run(&pool).await.unwrap();
         Self { pool }

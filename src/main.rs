@@ -32,7 +32,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     debug!(?args, "Starting numtracker service");
     match args.command {
         Command::Serve(opts) => graphql::serve_graphql(&args.db, opts).await,
-        Command::Schema => graphql::graphql_schema(),
+        Command::Schema => {
+            graphql::graphql_schema(std::io::stdout()).expect("Failed to write schema")
+        }
     }
     Ok(())
 }

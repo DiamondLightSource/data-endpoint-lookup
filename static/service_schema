@@ -1,0 +1,99 @@
+type BeamlineConfiguration {
+	visitTemplate: String!
+	scanTemplate: String!
+	detectorTemplate: String!
+	latestScanNumber: Int!
+}
+
+
+input ConfigurationUpdates {
+	visit: VisitTemplate
+	scan: ScanTemplate
+	detector: DetectorTemplate
+	scanNumber: Int
+	extension: String
+}
+
+scalar Detector
+
+"""
+GraphQL type to mimic a key-value pair from the map type that GraphQL doesn't have
+"""
+type DetectorPath {
+	name: String!
+	path: String!
+}
+
+"""
+A template describing the location within a visit directory where the data for a given detector should be written
+
+It should contain placeholders for {detector} and {scan_number} to ensure paths are unique between scans and for multiple detectors.
+"""
+scalar DetectorTemplate
+
+
+
+
+type Mutation {
+	"""
+	Access scan file locations for the next scan
+	"""
+	scan(beamline: String!, visit: String!, sub: Subdirectory): ScanPaths!
+	configure(beamline: String!, config: ConfigurationUpdates!): BeamlineConfiguration!
+}
+
+type Query {
+	paths(beamline: String!, visit: String!): VisitPath!
+	configuration(beamline: String!): BeamlineConfiguration!
+}
+
+type ScanPaths {
+	"""
+	The visit used to generate this scan information. Should be the same as the visit passed in
+	"""
+	visit: VisitPath!
+	"""
+	The root scan file for this scan. The path has no extension so that the format can be
+	chosen by the client.
+	"""
+	scanFile: String!
+	"""
+	The scan number for this scan. This should be unique for the requested beamline.
+	"""
+	scanNumber: Int!
+	"""
+	The paths where the given detectors should write their files.
+	
+	Detector names are normalised before being used in file names by replacing any
+	non-alphanumeric characters with '_'. If there are duplicate names in the list
+	of detectors after this normalisation, there will be duplicate paths in the
+	results.
+	"""
+	detectors(names: [Detector!]!): [DetectorPath!]!
+}
+
+"""
+A template describing the location within a visit directory where the root scan file should be written
+"""
+scalar ScanTemplate
+
+
+scalar Subdirectory
+
+type VisitPath {
+	visit: String!
+	beamline: String!
+	directory: String!
+}
+
+"""
+A template describing the path to the visit directory for a beamline
+"""
+scalar VisitTemplate
+
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}
